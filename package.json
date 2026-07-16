@@ -1,0 +1,35 @@
+{
+  "name": "necromancer",
+  "version": "0.1.0",
+  "description": "Resurrect abandoned JavaScript packages from observed behavior.",
+  "type": "module",
+  "bin": {
+    "necromancer": "./dist/cli.js"
+  },
+  "exports": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "c8 npm run test",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "c8": "^10.1.3",
+    "fast-check": "^4.0.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  }
+}
