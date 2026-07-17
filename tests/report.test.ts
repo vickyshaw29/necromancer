@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { queryOsv, queryOsvDependencies } from "../src/report/index.js";
+import { renderGraveyard } from "../src/report/html.js";
 import { createReport } from "../src/report/stage.js";
 import type { ProbeArtifact } from "../src/distill/index.js";
 import type { ReportInput } from "../src/report/index.js";
@@ -78,7 +79,11 @@ describe("graveyard HTML", () => {
     const rebuiltSource = path.join(directory, "rebuilt", "src");
     await mkdir(rebuiltSource, { recursive: true });
     await Promise.all([
-      writeFile(path.join(directory, "SOUL.md"), "# SOUL — report-fixture\n\n## Behavioral clusters\n\n### `report-fixture`\n\n#### Typical inputs\n\n- Evidence: `behavior-0001`.\n", "utf8"),
+      writeFile(
+        path.join(directory, "SOUL.md"),
+        "# SOUL — report-fixture\n\n## Behavioral clusters\n\n### `report-fixture`\n\n#### Typical inputs\n\n- Evidence: `behavior-0001`.\n\n## Quirks\n\n- **String preservation** — `report-fixture` with `[\"x\"]` returned \"x\". Evidence: `behavior-0001`.\n- **Second recorded quirk** — preserved below the fold. Evidence: `behavior-0002`.\n",
+        "utf8"
+      ),
       writeFile(path.join(directory, "rebuilt", "package.json"), '{"name":"rebuilt","type":"module"}\n', "utf8"),
       writeFile(path.join(rebuiltSource, "index.ts"), 'export default function fixture(value: string): string { return value; }\n', "utf8")
     ]);
@@ -103,12 +108,61 @@ describe("graveyard HTML", () => {
     const html = await readFile(result.reportPath, "utf8");
 
     expect(html).toContain("2 of 2 observed behaviors, 83.33% branch coverage of the original");
+    expect(html).toContain("2 of 2 observed behaviors reproduced");
+    expect(html).toContain("83.33% branch coverage of the original");
+    expect(html).toContain("Recorded-suite evidence");
+    expect(html).toContain("Original-code evidence");
+    expect(html).toContain('data-evidence="observed-suite"');
+    expect(html).toContain('data-evidence="original-coverage"');
+    expect(html).toContain("No unobserved behavior is claimed; this receipt is limited to the recorded suite.");
+    expect(html).toContain("Rebuild engine used");
+    expect(html).toContain("stub");
+    expect(html).toContain("Source quarantine");
+    expect(html).toContain("the SOUL");
+    expect(html).toContain("the characterization suite");
+    expect(html).toContain("the public API shape");
+    expect(html).toContain("failing observations");
+    expect(html).toContain("Original source was withheld.");
+    expect(html).toContain("Featured quirk — first recorded entry");
+    expect(html).toContain("behavior-0001");
+    expect(html).toContain("Recorded output / throw");
     expect(html).toContain("SOUL behavior clusters");
+    expect(html).toContain("SOUL quirks");
+    expect(html).toContain("Second recorded quirk");
     expect(html).toContain("Original source");
     expect(html).toContain("Rebuilt source");
     expect(html).toContain("no advisories found across 0 runtime dependencies");
     expect(html).toContain("REVIVED");
     expect(html).not.toMatch(/(?:src|href)=["']https?:/i);
     expect(result.data.rebuiltOsv).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, scannedDependencyCount: 0 });
+  });
+
+  it("renders the no-quirk fallback and escapes a malicious package name", async () => {
+    const directory = await mkdtemp(path.join(process.cwd(), ".necromancer-cache", "report-test-"));
+    temporaryPaths.push(directory);
+    const rebuiltSource = path.join(directory, "rebuilt", "src");
+    await mkdir(rebuiltSource, { recursive: true });
+    await Promise.all([
+      writeFile(path.join(directory, "SOUL.md"), "# SOUL — fixture\n\n## Behavioral clusters\n\nNo extra behavior.\n\n## Quirks\n\nNo quirk was recorded.\n", "utf8"),
+      writeFile(path.join(directory, "rebuilt", "package.json"), '{"name":"rebuilt","type":"module"}\n', "utf8"),
+      writeFile(path.join(rebuiltSource, "index.ts"), "export const fixture = true;\n", "utf8")
+    ]);
+    const maliciousName = '<img src=x onerror="alert(1)">';
+    const result = await createReport(
+      {
+        packageName: maliciousName,
+        version: "1.0.0",
+        artifact,
+        triage: { loc: 1, runtimeDependencyCount: 0, nativeEvidence: [], filesystemImports: [], networkImports: [], verdict: "IN_SCOPE", reasons: [] },
+        resurrection: { packageName: maliciousName, engine: "stub", rounds: [], passed: 0, total: 2, complete: false, resultPath: path.join(directory, "rebuilt", "result.json") },
+        artifactDirectory: directory
+      },
+      { osvQuery: async () => ({ status: "known", advisoryCount: 0, cveCount: 0 }) }
+    );
+    const html = renderGraveyard(result.data);
+
+    expect(html).toContain("No quirk was recorded");
+    expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+    expect(html).not.toContain('<img src=x onerror="alert(1)">');
   });
 });
