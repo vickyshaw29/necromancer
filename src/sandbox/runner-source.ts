@@ -52,27 +52,48 @@ function jsonSafe(value, valuePath = "$", ancestors = new Map(), depth = 0) {
 
   try {
     if (value instanceof Error) {
-      return tagged("error", { name: value.name || "Error", message: String(value.message || "") });
+      return tagged("error", { name: Reflect.get(value, "name") || "Error", message: String(Reflect.get(value, "message") || "") });
     }
     if (value instanceof Date) {
-      return tagged("date", { value: Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString() });
+      const time = Date.prototype.getTime.call(value);
+      return tagged("date", { value: Number.isNaN(time) ? "Invalid Date" : Date.prototype.toISOString.call(value) });
     }
-    if (value instanceof RegExp) return tagged("regexp", { value: value.toString() });
+    if (value instanceof RegExp) return tagged("regexp", { value: RegExp.prototype.toString.call(value) });
     if (typeof Buffer !== "undefined" && Buffer.isBuffer(value)) {
-      return tagged("buffer", { encoding: "base64", value: value.toString("base64") });
+      return tagged("buffer", { encoding: "base64", value: Buffer.prototype.toString.call(value, "base64") });
     }
 
     ancestors.set(value, valuePath);
     if (Array.isArray(value)) {
-      const entries = value.slice(0, MAX_ENTRIES).map((item, index) => jsonSafe(item, valuePath + "[" + index + "]", ancestors, depth + 1));
-      if (value.length > MAX_ENTRIES) entries.push(tagged("truncated", { reason: "max_entries" }));
+      const length = Reflect.get(value, "length");
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        const entries = [];
+        const keys = Object.keys(value);
+        for (let index = 0; index < keys.length && index < MAX_ENTRIES; index += 1) {
+          const key = keys[index];
+          entries.push([key, jsonSafe(Reflect.get(value, key), valuePath + "." + key, ancestors, depth + 1)]);
+        }
+        if (keys.length > MAX_ENTRIES) entries.push(tagged("truncated", { reason: "max_entries" }));
+        ancestors.delete(value);
+        return tagged("array", { length, entries });
+      }
+      const entries = [];
+      for (let index = 0; index < length && index < MAX_ENTRIES; index += 1) {
+        const key = String(index);
+        entries.push(
+          Object.prototype.hasOwnProperty.call(value, key)
+            ? jsonSafe(Reflect.get(value, key), valuePath + "[" + index + "]", ancestors, depth + 1)
+            : null
+        );
+      }
+      if (length > MAX_ENTRIES) entries.push(tagged("truncated", { reason: "max_entries" }));
       ancestors.delete(value);
       return entries;
     }
     if (value instanceof Map) {
       const entries = [];
       let index = 0;
-      for (const [key, item] of value) {
+      for (const [key, item] of Map.prototype.entries.call(value)) {
         if (index >= MAX_ENTRIES) {
           entries.push(tagged("truncated", { reason: "max_entries" }));
           break;
@@ -86,7 +107,7 @@ function jsonSafe(value, valuePath = "$", ancestors = new Map(), depth = 0) {
     if (value instanceof Set) {
       const entries = [];
       let index = 0;
-      for (const item of value) {
+      for (const item of Set.prototype.values.call(value)) {
         if (index >= MAX_ENTRIES) {
           entries.push(tagged("truncated", { reason: "max_entries" }));
           break;
@@ -102,7 +123,7 @@ function jsonSafe(value, valuePath = "$", ancestors = new Map(), depth = 0) {
     const keys = Object.keys(value);
     for (const [index, key] of keys.slice(0, MAX_ENTRIES).entries()) {
       try {
-        output[key] = jsonSafe(value[key], valuePath + "." + key, ancestors, depth + 1);
+        output[key] = jsonSafe(Reflect.get(value, key), valuePath + "." + key, ancestors, depth + 1);
       } catch (error) {
         output[key] = tagged("unreadable", { message: errorMessage(error) });
       }
@@ -119,7 +140,7 @@ function jsonSafe(value, valuePath = "$", ancestors = new Map(), depth = 0) {
 }
 
 function errorMessage(error) {
-  if (error && typeof error === "object" && "message" in error) return String(error.message);
+  if (error && typeof error === "object" && "message" in error) return String(Reflect.get(error, "message"));
   return String(error);
 }
 

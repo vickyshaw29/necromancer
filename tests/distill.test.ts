@@ -55,6 +55,22 @@ const artifact: ProbeArtifact = {
       fn: "sandbox-edge-package",
       args: [tagKeyInput],
       result: { kind: { $necromancer: "undefined", note: "literal input data" } }
+    },
+    {
+      id: "behavior-0008",
+      fn: "sandbox-edge-package",
+      args: ["prototype-swapped-array"],
+      result: {
+        $necromancer: "array",
+        length: 4,
+        entries: [
+          ["0", 2],
+          ["1", 0],
+          ["2", 8],
+          ["3", -5],
+          ["label", "retained"]
+        ]
+      }
     }
   ]
 };
@@ -65,7 +81,7 @@ afterEach(async () => {
 
 async function runGeneratedSuite(directory: string): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs"), "run", "soul.test.ts"], {
+    const child = spawn(process.execPath, [path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs"), "run", "soul.test.ts", "--reporter=verbose"], {
       cwd: directory,
       env: { ...process.env, NECROMANCER_IMPL: "original/package" },
       stdio: ["ignore", "pipe", "pipe"],
@@ -106,7 +122,7 @@ describe("DISTILL", () => {
     const [soul, firstTestSource] = await Promise.all([readFile(result.soulPath, "utf8"), readFile(result.testPath, "utf8")]);
 
     expect(result.engine).toBe("heuristic");
-    expect(soul).toContain("This specification covers 7 observed behaviors, 42.50% branch coverage of the original.");
+    expect(soul).toContain("This specification covers 8 observed behaviors, 42.50% branch coverage of the original.");
     expect(soul).toContain("## Behavioral clusters");
     expect(soul).toContain("#### Typical inputs");
     expect(soul).toContain("#### Coercion and type chaos");
@@ -122,7 +138,32 @@ describe("DISTILL", () => {
 
     const suite = await runGeneratedSuite(directory);
     expect(suite.code, suite.output).toBe(0);
-    expect(suite.output).toContain("7 passed");
+    expect(suite.output).toContain("8 passed");
+    expect(suite.output).toContain("behavior-0001 — sandbox-edge-package");
+  });
+
+  it("skips legacy unserializable result tags when rendering a characterization suite", () => {
+    const notices: string[] = [];
+    const source = renderSoulTest(
+      {
+        ...artifact,
+        behaviors: [
+          ...artifact.behaviors,
+          {
+            id: "behavior-legacy",
+            fn: "sandbox-edge-package",
+            args: ["ordinary"],
+            result: { $necromancer: "unserializable", message: "legacy encoder failure" }
+          }
+        ]
+      },
+      (message) => notices.push(message)
+    );
+
+    expect(source).not.toContain("behavior-legacy");
+    expect(notices).toEqual([
+      "[DISTILL] Skipped behavior-legacy because its recorded result contains an unserializable serializer tag."
+    ]);
   });
 
   it("validates structured API prose with an offline fixture response", async () => {

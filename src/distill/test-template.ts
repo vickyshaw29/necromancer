@@ -1,10 +1,26 @@
+import { isRecord } from "../json.js";
 import { ProbeArtifact } from "./types.js";
 
-function templateData(artifact: ProbeArtifact): string {
-  return JSON.stringify(artifact.behaviors, null, 2);
+function containsUnserializableTag(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsUnserializableTag);
+  if (!isRecord(value)) return false;
+  if (value.$necromancer === "unserializable") return true;
+  return Object.keys(value).some((key) => containsUnserializableTag(value[key]));
 }
 
-export function renderSoulTest(artifact: ProbeArtifact): string {
+function testableBehaviors(artifact: ProbeArtifact, onNotice: (message: string) => void): ProbeArtifact["behaviors"] {
+  return artifact.behaviors.filter((behavior) => {
+    if (!containsUnserializableTag(behavior.result)) return true;
+    onNotice(`[DISTILL] Skipped ${behavior.id} because its recorded result contains an unserializable serializer tag.`);
+    return false;
+  });
+}
+
+function templateData(artifact: ProbeArtifact, onNotice: (message: string) => void): string {
+  return JSON.stringify(testableBehaviors(artifact, onNotice), null, 2);
+}
+
+export function renderSoulTest(artifact: ProbeArtifact, onNotice: (message: string) => void = () => undefined): string {
   return `import { expect, test } from "vitest";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -18,7 +34,7 @@ const MAX_ENTRIES = 1_000;
 const workspace = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const packageName = ${JSON.stringify(artifact.packageName)};
-const behaviors: Behavior[] = ${templateData(artifact)};
+const behaviors: Behavior[] = ${templateData(artifact, onNotice)};
 const implementationInput = process.env.NECROMANCER_IMPL ?? "original/package";
 const implementationPath = path.resolve(workspace, implementationInput);
 
@@ -77,21 +93,44 @@ function jsonSafe(value: unknown, valuePath = "$", ancestors = new Map<object, s
   if (depth >= MAX_DEPTH) return tagged("truncated", { reason: "max_depth" });
   if (ancestors.has(value)) return tagged("circular", { path: ancestors.get(value) });
   try {
-    if (value instanceof Error) return tagged("error", { name: value.name || "Error", message: String(value.message || "") });
-    if (value instanceof Date) return tagged("date", { value: Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString() });
-    if (value instanceof RegExp) return tagged("regexp", { value: value.toString() });
-    if (Buffer.isBuffer(value)) return tagged("buffer", { encoding: "base64", value: value.toString("base64") });
+    if (value instanceof Error) return tagged("error", { name: Reflect.get(value, "name") || "Error", message: String(Reflect.get(value, "message") || "") });
+    if (value instanceof Date) {
+      const time = Date.prototype.getTime.call(value);
+      return tagged("date", { value: Number.isNaN(time) ? "Invalid Date" : Date.prototype.toISOString.call(value) });
+    }
+    if (value instanceof RegExp) return tagged("regexp", { value: RegExp.prototype.toString.call(value) });
+    if (Buffer.isBuffer(value)) return tagged("buffer", { encoding: "base64", value: Buffer.prototype.toString.call(value, "base64") });
     ancestors.set(value, valuePath);
     if (Array.isArray(value)) {
-      const entries = value.slice(0, MAX_ENTRIES).map((item, index) => jsonSafe(item, "\${valuePath}[\${index}]", ancestors, depth + 1));
-      if (value.length > MAX_ENTRIES) entries.push(tagged("truncated", { reason: "max_entries" }));
+      const length = Reflect.get(value, "length");
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        const entries: unknown[] = [];
+        const keys = Object.keys(value);
+        for (let index = 0; index < keys.length && index < MAX_ENTRIES; index += 1) {
+          const key = keys[index];
+          entries.push([key, jsonSafe(Reflect.get(value, key), "\${valuePath}.\${key}", ancestors, depth + 1)]);
+        }
+        if (keys.length > MAX_ENTRIES) entries.push(tagged("truncated", { reason: "max_entries" }));
+        ancestors.delete(value);
+        return tagged("array", { length, entries });
+      }
+      const entries: unknown[] = [];
+      for (let index = 0; index < length && index < MAX_ENTRIES; index += 1) {
+        const key = String(index);
+        entries.push(
+          Object.prototype.hasOwnProperty.call(value, key)
+            ? jsonSafe(Reflect.get(value, key), "\${valuePath}[\${index}]", ancestors, depth + 1)
+            : null
+        );
+      }
+      if (length > MAX_ENTRIES) entries.push(tagged("truncated", { reason: "max_entries" }));
       ancestors.delete(value);
       return entries;
     }
     if (value instanceof Map) {
       const entries: unknown[] = [];
       let index = 0;
-      for (const [key, item] of value) {
+      for (const [key, item] of Map.prototype.entries.call(value)) {
         if (index >= MAX_ENTRIES) {
           entries.push(tagged("truncated", { reason: "max_entries" }));
           break;
@@ -105,7 +144,7 @@ function jsonSafe(value: unknown, valuePath = "$", ancestors = new Map<object, s
     if (value instanceof Set) {
       const entries: unknown[] = [];
       let index = 0;
-      for (const item of value) {
+      for (const item of Set.prototype.values.call(value)) {
         if (index >= MAX_ENTRIES) {
           entries.push(tagged("truncated", { reason: "max_entries" }));
           break;
@@ -175,7 +214,7 @@ function resolveFunction(moduleValue: unknown, exportPath: string): (...args: un
 }
 
 for (const behavior of behaviors) {
-  test("\${behavior.id} — \${behavior.fn}", async () => {
+  test(\`\${behavior.id} — \${behavior.fn}\`, async () => {
     try {
       const moduleValue = await loadImplementation(behavior.id);
       const args = revive(behavior.args);

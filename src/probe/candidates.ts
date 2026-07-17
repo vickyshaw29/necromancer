@@ -47,9 +47,21 @@ export function toArtifactValue(value: unknown, ancestors = new WeakMap<object, 
   if (ancestors.has(value)) return { [INPUT_TAG]: "circular", path: ancestors.get(value) ?? "$" };
   ancestors.set(value, valuePath);
   try {
-    if (Array.isArray(value)) return value.map((item, index) => toArtifactValue(item, ancestors, `${valuePath}[${index}]`));
+    if (Array.isArray(value)) {
+      const output: JsonSafeValue[] = [];
+      const length = Reflect.get(value, "length");
+      for (let index = 0; index < length; index += 1) {
+        const key = String(index);
+        output.push(
+          Object.prototype.hasOwnProperty.call(value, key)
+            ? toArtifactValue(Reflect.get(value, key), ancestors, `${valuePath}[${index}]`)
+            : null
+        );
+      }
+      return output;
+    }
     const output: Record<string, JsonSafeValue> = Object.create(null);
-    for (const [key, item] of Object.entries(value)) output[key] = toArtifactValue(item, ancestors, `${valuePath}.${key}`);
+    for (const key of Object.keys(value)) output[key] = toArtifactValue(Reflect.get(value, key), ancestors, `${valuePath}.${key}`);
     return hasInputTag(output) ? { [INPUT_TAG]: "object", value: output } : output;
   } finally {
     ancestors.delete(value);

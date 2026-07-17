@@ -15,9 +15,17 @@ function encodeWireValue(value: unknown, ancestors = new WeakSet<object>()): unk
   if (ancestors.has(value)) throw new Error("Sandbox invocation arguments cannot contain circular references.");
   ancestors.add(value);
   try {
-    if (Array.isArray(value)) return { $necromancerInput: "array", value: value.map((item) => encodeWireValue(item, ancestors)) };
+    if (Array.isArray(value)) {
+      const output: unknown[] = [];
+      const length = Reflect.get(value, "length");
+      for (let index = 0; index < length; index += 1) {
+        const key = String(index);
+        output.push(Object.prototype.hasOwnProperty.call(value, key) ? encodeWireValue(Reflect.get(value, key), ancestors) : null);
+      }
+      return { $necromancerInput: "array", value: output };
+    }
     const output: Record<string, unknown> = Object.create(null);
-    for (const [key, item] of Object.entries(value)) output[key] = encodeWireValue(item, ancestors);
+    for (const key of Object.keys(value)) output[key] = encodeWireValue(Reflect.get(value, key), ancestors);
     return { $necromancerInput: "object", value: output };
   } finally {
     ancestors.delete(value);

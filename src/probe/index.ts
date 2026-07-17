@@ -20,6 +20,17 @@ function stable(value: unknown): string {
     .join(",")}}`;
 }
 
+function containsUnserializableTag(value: JsonSafeValue): boolean {
+  if (Array.isArray(value)) return value.some(containsUnserializableTag);
+  if (value === null || typeof value !== "object") return false;
+  if (value.$necromancer === "unserializable") return true;
+  return Object.keys(value).some((key) => containsUnserializableTag(value[key]));
+}
+
+function hasUnserializableResult(result: Awaited<ReturnType<ProbeTarget["sandbox"]["invoke"]>>): boolean {
+  return result.ok && containsUnserializableTag(result.value);
+}
+
 function behaviorFromResult(id: string, fn: string, args: unknown[], result: Awaited<ReturnType<ProbeTarget["sandbox"]["invoke"]>>): ProbeBehavior {
   const artifactArgs = args.map((item) => toArtifactValue(item)) as JsonSafeValue[];
   if (result.ok) return { id, fn, args: artifactArgs, result: result.value };
@@ -68,6 +79,10 @@ export async function probePackage(target: ProbeTarget, options: ProbeOptions): 
     } catch (error) {
       const detail = error instanceof Error ? error.message : "sandbox invocation failed";
       notice(`[PROBE] Skipped ${candidate.fn} candidate after runner failure: ${detail}`);
+      continue;
+    }
+    if (hasUnserializableResult(first) || hasUnserializableResult(second)) {
+      notice(`[PROBE] Skipped ${candidate.fn} candidate because its returned value could not be serialized safely.`);
       continue;
     }
     if (!deterministic(first, second)) {

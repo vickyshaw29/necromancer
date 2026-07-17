@@ -39,7 +39,7 @@ describe("PROBE", () => {
           functions: [
             {
               exportPath: "sandbox-edge-package",
-              candidates: [{ args: ["ordinary"] }, { args: ["throw"] }, { args: ["circular"] }]
+              candidates: [{ args: ["ordinary"] }, { args: ["throw"] }, { args: ["circular"] }, { args: ["prototype-swapped-array"] }]
             }
           ]
         };
@@ -67,12 +67,54 @@ describe("PROBE", () => {
     expect(result.examples).toEqual(expect.arrayContaining([expect.objectContaining({ source: "readme", snippet: 'edge("ordinary")' })]));
     expect(result.behaviors).toHaveLength(16);
     expect(result.behaviors.some((behavior) => behavior.throw?.name === "RangeError")).toBe(true);
+    expect(result.behaviors).toContainEqual(
+      expect.objectContaining({
+        args: ["prototype-swapped-array"],
+        result: {
+          $necromancer: "array",
+          length: 4,
+          entries: [
+            ["0", 2],
+            ["1", 0],
+            ["2", 8],
+            ["3", -5],
+            ["label", "retained"]
+          ]
+        }
+      })
+    );
     expect(result.coverage.available).toBe(true);
     expect(result.coverage.branchCoverage).toBeGreaterThan(0);
 
     const artifact = JSON.parse(await readFile(path.join(artifactDirectory, "behaviors.json"), "utf8")) as { behaviors: unknown[] };
     expect(artifact.behaviors).toHaveLength(16);
     await expect(readFile(path.join(artifactDirectory, "coverage.json"), "utf8")).resolves.toContain("branchCoverage");
+  });
+
+  it("discards a result the sandbox cannot serialize instead of recording it as behavior", async () => {
+    const { runner, artifactDirectory } = await probeRunner();
+    const notices: string[] = [];
+    const fixturePlan: InputPlanEngine = {
+      name: "fixture",
+      async generate() {
+        return { functions: [{ exportPath: "sandbox-edge-package", candidates: [{ args: ["unserializable"] }] }] };
+      }
+    };
+
+    const result = await probePackage(
+      {
+        packageName: "sandbox-edge-package",
+        version: "1.0.0",
+        packagePath: fixturePath,
+        sandbox: runner,
+        artifactDirectory
+      },
+      { maxBehaviors: 4, planEngine: fixturePlan, onNotice: (message) => notices.push(message) }
+    );
+
+    expect(result.behaviors.some((behavior) => behavior.args[0] === "unserializable")).toBe(false);
+    expect(notices).toContain("[PROBE] Skipped sandbox-edge-package candidate because its returned value could not be serialized safely.");
+    await expect(readFile(path.join(artifactDirectory, "behaviors.json"), "utf8")).resolves.not.toContain('"$necromancer": "unserializable"');
   });
 
   it("validates an API structured-output plan using a stubbed fetch implementation", async () => {

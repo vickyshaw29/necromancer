@@ -95,6 +95,27 @@ describe("SANDBOX RPC runner", () => {
     });
   });
 
+  it("serializes a prototype-swapped array without using its inherited methods", async () => {
+    const runner = await childRunner();
+
+    const result = await runner.invoke("sandbox-edge-package", ["prototype-swapped-array"]);
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        $necromancer: "array",
+        length: 4,
+        entries: [
+          ["0", 2],
+          ["1", 0],
+          ["2", 8],
+          ["3", -5],
+          ["label", "retained"]
+        ]
+      }
+    });
+  });
+
   it("returns thrown Error name and message as RPC data", async () => {
     const runner = await childRunner();
 

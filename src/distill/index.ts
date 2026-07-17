@@ -21,6 +21,6 @@ export async function distillArtifact(
   const generated = await generateSoul({ preference: options.engine, request, onNotice: options.onNotice });
   const soul = normalizeSoul(generated.soul);
   if (!soul) throw new Error("The selected DISTILL engine returned an empty SOUL document.");
-  const output = await writeDistillWorkspace(artifactDirectory, soul, renderSoulTest(artifact));
+  const output = await writeDistillWorkspace(artifactDirectory, soul, renderSoulTest(artifact, options.onNotice ?? (() => undefined)));
   return { engine: generated.engine, originalPath, ...output };
 }
