@@ -10,7 +10,7 @@ import { AuthoredSourceFile, ProvenanceReceipt, ReportEvidence, UnobservedBounda
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 const CLAIM_BOUNDARY = "Behavior outside the observed coverage is not claimed." as const;
 
-async function sha256File(filePath: string): Promise<string> {
+export async function sha256File(filePath: string): Promise<string> {
   const hash = createHash("sha256");
   const stream = createReadStream(filePath);
   for await (const chunk of stream) hash.update(chunk);

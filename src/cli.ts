@@ -5,10 +5,12 @@ import path from "node:path";
 import { createProbeArtifactDirectory } from "./artifacts.js";
 import { distillEngine, runDistillCommand } from "./distill/command.js";
 import { discardExhumedPackage, exhume, reportOutOfScope, TriageResult } from "./exhume/index.js";
+import { writeGraveyardIndex } from "./graveyard/index.js";
 import { loadDotEnv, probePackage, ProbeEnginePreference } from "./probe/index.js";
 import { resurrectEngine, runResurrectCommand } from "./resurrect/command.js";
 import { createSandboxRunner, SandboxRunner } from "./sandbox/index.js";
 import { printBanner, printPhase, printReproducibilityHandoff } from "./terminal.js";
+import { runVerifyCommand } from "./verify/index.js";
 
 function marker(value: boolean): string {
   return value ? "detected" : "none";
@@ -166,6 +168,21 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--fast", "cap an automatically-run probe at 60 behaviors")
     .option("--engine <engine>", "rebuild engine: auto, api, or codex", resurrectEngine, "auto")
     .action(runResurrectCommand);
+
+  program
+    .command("graveyard")
+    .description("write an offline index of local reconstruction artifacts")
+    .option("--cache <directory>", "artifact cache directory to scan")
+    .action(async (options: { cache?: string }) => {
+      const indexPath = await writeGraveyardIndex(options.cache);
+      console.log(`Graveyard index: ${indexPath}`);
+    });
+
+  program
+    .command("verify <pkg>")
+    .description("re-measure local reconstruction evidence without network access")
+    .option("--artifact <directory>", "artifact directory to verify instead of cache lookup")
+    .action(runVerifyCommand);
 
   await program.parseAsync(argv);
 }

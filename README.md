@@ -136,9 +136,37 @@ necromancer <pkg>                         # EXHUME + SANDBOX gate
 necromancer probe <pkg> --fast            # record observed behavior
 necromancer distill <pkg>                 # reuse or create probe artifacts
 necromancer resurrect <pkg> --engine codex
+necromancer graveyard                      # index local reports for offline browsing
+necromancer verify <pkg>                   # re-measure local provenance and suites
 ```
 
 `probe` and `distill` accept `--max-behaviors`, `--fast`, and their documented engine options. `resurrect` chains missing PROBE and DISTILL artifacts automatically, then writes the REPORT.
+
+### `graveyard`
+
+`graveyard` scans `.necromancer-cache/probes/` by default and writes a self-contained `graveyard-index.html` there. Pass `--cache <dir>` to index a different artifact cache; each completed card links to its local `graveyard.html` report.
+
+```text
+$ necromancer graveyard
+Graveyard index: /work/necromancer/.necromancer-cache/probes/graveyard-index.html
+```
+
+### `verify <pkg>`
+
+`verify` stays offline: it re-hashes the local provenance-attested SOUL, suite, and rebuilt sources, then measures the emitted suite against the staged original and rebuilt implementation. A bare package name selects the newest local artifact for that package; use `name@version` to select a version or `--artifact <dir>` to select an artifact directly.
+
+```text
+$ necromancer verify deep-extend@0.5.0
+Verification receipt — /work/necromancer/.necromancer-cache/probes/deep-extend-0.5.0-abc123
+SOUL.md sha256 ✓ matches attestation
+soul.test.ts sha256 ✓ matches attestation
+rebuilt/src/index.ts sha256 ✓ matches attestation
+observed suite vs original: ✓ 53 of 53
+observed suite vs rebuilt: ✓ 53 of 53
+Not re-verified: registry tarball hash (no network in verify)
+Not re-verified: OSV advisory data (recorded at report time; not re-queried)
+All performed checks passed.
+```
 
 ## Testing
 

@@ -1,6 +1,7 @@
-import { access, readFile, rm, stat } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { isRecord } from "../json.js";
 import { processFailure, runProcess } from "../process.js";
@@ -26,11 +27,12 @@ function hostVitest(): string | undefined {
   }
 }
 
-async function vitestPath(artifactDirectory: string): Promise<string> {
+async function vitestPath(artifactDirectory: string, offline: boolean): Promise<string> {
   const local = path.join(artifactDirectory, "node_modules", "vitest", "vitest.mjs");
   if (await exists(local)) return local;
   const host = hostVitest();
   if (host) return host;
+  if (offline) throw new Error("An offline characterization run requires Vitest to be available in the artifact or NECROMANCER installation.");
   const install = await runProcess(process.platform === "win32" ? "npm.cmd" : "npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
     cwd: artifactDirectory,
     timeoutMs: 60_000
@@ -69,25 +71,38 @@ async function reportText(reportPath: string): Promise<string> {
   return readFile(reportPath, "utf8");
 }
 
-function testEnvironment(): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { NECROMANCER_IMPL: "rebuilt" };
+export type CharacterizationImplementation = "original" | "rebuilt";
+
+export interface CharacterizationOptions {
+  implementation?: CharacterizationImplementation;
+  offline?: boolean;
+  readOnly?: boolean;
+}
+
+function testEnvironment(implementation: CharacterizationImplementation): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = { NECROMANCER_IMPL: implementation === "original" ? "original/package" : "rebuilt" };
   for (const key of TEST_ENVIRONMENT_KEYS) {
     if (process.env[key] !== undefined) environment[key] = process.env[key];
   }
   return environment;
 }
 
-export async function runCharacterization(artifactDirectory: string): Promise<CharacterizationResult> {
-  const reportPath = path.join(artifactDirectory, ".necromancer-resurrection-report.json");
-  await rm(reportPath, { force: true });
-  const vitest = await vitestPath(artifactDirectory);
-  const result = await runProcess(process.execPath, [vitest, "run", "soul.test.ts", "--reporter=json", "--outputFile", reportPath], {
-    cwd: artifactDirectory,
-    env: testEnvironment(),
-    timeoutMs: 60_000
-  });
-  if (!(await exists(reportPath))) throw processFailure("Vitest characterization run", result);
-  const parsed = parseReport(JSON.parse(await reportText(reportPath)));
-  if (result.code !== 0 && parsed.failures.length === 0) throw processFailure("Vitest characterization run", result);
-  return parsed;
+export async function runCharacterization(artifactDirectory: string, options: CharacterizationOptions = {}): Promise<CharacterizationResult> {
+  const reportDirectory = options.readOnly ? await mkdtemp(path.join(tmpdir(), "necromancer-characterization-")) : artifactDirectory;
+  const reportPath = path.join(reportDirectory, options.readOnly ? "report.json" : ".necromancer-resurrection-report.json");
+  try {
+    if (!options.readOnly) await rm(reportPath, { force: true });
+    const vitest = await vitestPath(artifactDirectory, options.offline === true);
+    const result = await runProcess(process.execPath, [vitest, "run", "soul.test.ts", "--reporter=json", "--outputFile", reportPath], {
+      cwd: artifactDirectory,
+      env: testEnvironment(options.implementation ?? "rebuilt"),
+      timeoutMs: 60_000
+    });
+    if (!(await exists(reportPath))) throw processFailure("Vitest characterization run", result);
+    const parsed = parseReport(JSON.parse(await reportText(reportPath)));
+    if (result.code !== 0 && parsed.failures.length === 0) throw processFailure("Vitest characterization run", result);
+    return parsed;
+  } finally {
+    if (options.readOnly) await rm(reportDirectory, { recursive: true, force: true });
+  }
 }
