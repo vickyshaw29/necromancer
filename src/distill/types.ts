@@ -1,4 +1,5 @@
 import { CoverageSummary, ProbeBehavior } from "../probe/index.js";
+import { ModuleSurface } from "../sandbox/index.js";
 
 export type DistillEngineName = "api" | "codex" | "heuristic";
 export type DistillEnginePreference = DistillEngineName | "auto";
@@ -7,6 +8,7 @@ export interface ProbeArtifact {
   packageName: string;
   behaviors: ProbeBehavior[];
   coverage: CoverageSummary;
+  surface?: ModuleSurface;
 }
 
 export interface SoulRequest {

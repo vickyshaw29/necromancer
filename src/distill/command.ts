@@ -1,5 +1,5 @@
-import { mkdir, mkdtemp, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { createProbeArtifactDirectory, findLatestProbeArtifact } from "../artifacts.js";
 import { discardExhumedPackage, exhume, ScopeReason } from "../exhume/index.js";
 import { loadDotEnv, probePackage, ProbeEnginePreference } from "../probe/index.js";
 import { createSandboxRunner, SandboxRunner } from "../sandbox/index.js";
@@ -17,52 +17,17 @@ function scopeMessage(reasons: ScopeReason[]): string {
   ].join(" ");
 }
 
-function safeArtifactName(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "package";
+export interface ProbeArtifactOptions {
+  maxBehaviors: number;
+  fast?: boolean;
+  engine: ProbeEnginePreference;
 }
 
-function artifactsBase(): string {
-  return path.join(process.cwd(), ".necromancer-cache", "probes");
-}
-
-async function latestArtifact(packageName: string, version: string): Promise<string | undefined> {
-  const prefix = `${safeArtifactName(`${packageName}-${version}`)}-`;
-  let entries: string[];
-  try {
-    entries = await readdir(artifactsBase());
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
-    throw error;
-  }
-  const candidates = await Promise.all(
-    entries
-      .filter((entry) => entry.startsWith(prefix))
-      .map(async (entry) => {
-        const directory = path.join(artifactsBase(), entry);
-        try {
-          const details = await stat(path.join(directory, "behaviors.json"));
-          return details.isFile() ? { directory, modified: details.mtimeMs } : undefined;
-        } catch {
-          return undefined;
-        }
-      })
-  );
-  return candidates
-    .filter((candidate): candidate is { directory: string; modified: number } => candidate !== undefined)
-    .sort((left, right) => right.modified - left.modified)[0]?.directory;
-}
-
-async function newArtifactDirectory(packageName: string, version: string): Promise<string> {
-  const base = artifactsBase();
-  await mkdir(base, { recursive: true });
-  return mkdtemp(path.join(base, `${safeArtifactName(`${packageName}-${version}`)}-`));
-}
-
-async function probeIntoArtifact(
+export async function probeIntoArtifact(
   packageName: string,
   packagePath: string,
   artifactDirectory: string,
-  options: DistillCommandOptions
+  options: ProbeArtifactOptions
 ): Promise<void> {
   const coverageDirectory = path.join(artifactDirectory, ".v8-coverage");
   let sandbox: SandboxRunner | undefined;
@@ -83,9 +48,7 @@ async function probeIntoArtifact(
   }
 }
 
-export interface DistillCommandOptions {
-  maxBehaviors: number;
-  fast?: boolean;
+export interface DistillCommandOptions extends ProbeArtifactOptions {
   engine: CommandEngine;
 }
 
@@ -108,11 +71,11 @@ export async function runDistillCommand(pkg: string, options: DistillCommandOpti
       return;
     }
 
-    let artifactDirectory = await latestArtifact(exhumed.manifest.name, exhumed.manifest.version);
+    let artifactDirectory = await findLatestProbeArtifact(exhumed.manifest.name, exhumed.manifest.version);
     if (artifactDirectory) {
       console.log(`[3/6] PROBE       Reusing ${path.join(artifactDirectory, "behaviors.json")}`);
     } else {
-      artifactDirectory = await newArtifactDirectory(exhumed.manifest.name, exhumed.manifest.version);
+      artifactDirectory = await createProbeArtifactDirectory(exhumed.manifest.name, exhumed.manifest.version);
       await probeIntoArtifact(exhumed.manifest.name, exhumed.packagePath, artifactDirectory, options);
     }
     const artifact = await readProbeArtifact(path.join(artifactDirectory, "behaviors.json"));
@@ -123,7 +86,7 @@ export async function runDistillCommand(pkg: string, options: DistillCommandOpti
     });
     console.log(`DISTILL writer: ${result.engine}`);
     console.log(`Artifacts: ${result.soulPath}, ${result.testPath}`);
-    console.log("[5/6] RESURRECT   queued for Milestone 5");
+    console.log("[5/6] RESURRECT   available: necromancer resurrect <pkg>");
     console.log("[6/6] REPORT      queued for Milestone 6");
   } finally {
     await discardExhumedPackage(exhumed);

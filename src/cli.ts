@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { distillEngine, runDistillCommand } from "./distill/command.js";
 import { discardExhumedPackage, exhume, ScopeReason, TriageResult } from "./exhume/index.js";
 import { loadDotEnv, probePackage, ProbeEnginePreference } from "./probe/index.js";
+import { resurrectEngine, runResurrectCommand } from "./resurrect/command.js";
 import { createSandboxRunner, SandboxRunner } from "./sandbox/index.js";
 
 function marker(value: boolean): string {
@@ -111,7 +112,7 @@ async function runProbeCommand(
     console.log(`Input planner: ${result.engine}`);
     console.log(`Artifacts: ${result.artifactPath}`);
     console.log("[4/6] DISTILL     available: necromancer distill <pkg>");
-    console.log("[5/6] RESURRECT   queued for Milestone 5");
+    console.log("[5/6] RESURRECT   available: necromancer resurrect <pkg>");
     console.log("[6/6] REPORT      queued for Milestone 6");
   } finally {
     await sandbox?.dispose();
@@ -153,7 +154,7 @@ export async function runCli(argv: string[]): Promise<void> {
         console.log(`[2/6] SANDBOX     Ready (${sandbox.mode} runner).`);
         console.log("[3/6] PROBE       queued for Milestone 3");
         console.log("[4/6] DISTILL     available: necromancer distill <pkg>");
-        console.log("[5/6] RESURRECT   queued for Milestone 5");
+        console.log("[5/6] RESURRECT   available: necromancer resurrect <pkg>");
         console.log("[6/6] REPORT      queued for Milestone 6");
         if (options.keepWorkspace) console.log(`\nEXHUME workspace retained: ${exhumed.workspacePath}`);
       } finally {
@@ -178,6 +179,14 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--fast", "cap an automatically-run probe at 60 behaviors")
     .option("--engine <engine>", "prose and input planner: auto, api, codex, or heuristic", distillEngine, "auto")
     .action(runDistillCommand);
+
+  program
+    .command("resurrect <pkg>")
+    .description("rebuild a package from its distilled observed behavior")
+    .option("--max-behaviors <count>", "maximum deterministic behaviors when a probe is needed", positiveInteger, 80)
+    .option("--fast", "cap an automatically-run probe at 60 behaviors")
+    .option("--engine <engine>", "rebuild engine: auto, api, or codex", resurrectEngine, "auto")
+    .action(runResurrectCommand);
 
   await program.parseAsync(argv);
 }

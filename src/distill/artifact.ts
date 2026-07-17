@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { CoverageSummary, ProbeBehavior } from "../probe/index.js";
+import { ModuleSurface } from "../sandbox/index.js";
 import { ProbeArtifact } from "./types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -22,13 +23,25 @@ function isCoverage(value: unknown): value is CoverageSummary {
   );
 }
 
+function isSurface(value: unknown): value is ModuleSurface {
+  if (!isRecord(value) || !Array.isArray(value.exports)) return false;
+  return value.exports.every((entry) => {
+    return isRecord(entry) && typeof entry.path === "string" && typeof entry.type === "string" && (entry.arity === undefined || typeof entry.arity === "number");
+  });
+}
+
 export function parseProbeArtifact(value: unknown): ProbeArtifact {
   if (!isRecord(value) || typeof value.packageName !== "string" || !Array.isArray(value.behaviors) || !isCoverage(value.coverage)) {
     throw new Error("behaviors.json is not a valid Necromancer probe artifact.");
   }
   const behaviors = value.behaviors.filter(isBehavior);
   if (behaviors.length !== value.behaviors.length) throw new Error("behaviors.json contains an invalid behavior record.");
-  return { packageName: value.packageName, behaviors, coverage: value.coverage };
+  return {
+    packageName: value.packageName,
+    behaviors,
+    coverage: value.coverage,
+    ...(isSurface(value.surface) ? { surface: value.surface } : {})
+  };
 }
 
 export async function readProbeArtifact(artifactPath: string): Promise<ProbeArtifact> {
