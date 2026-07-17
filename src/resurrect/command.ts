@@ -31,13 +31,26 @@ function osvSummary(result: ReportResult["data"]["originalOsv"]): string {
   return `${result.cveCount ?? 0} CVE aliases across ${result.advisoryCount ?? 0} OSV advisories`;
 }
 
+function identifierSummary(result: ReportResult["data"]["originalOsv"]): string {
+  if (result.status === "unknown") return "";
+  const identifiers = result.identifiers ?? [];
+  return identifiers.length > 0 ? `; returned identifiers: ${identifiers.join(", ")}` : "";
+}
+
+function originalOsvSummary(report: ReportResult): string {
+  const { packageName, version, originalOsv } = report.data;
+  return `${osvSummary(originalOsv)} — original: ${packageName}@${version}, queried at report time${identifierSummary(originalOsv)}`;
+}
+
 function rebuiltOsvSummary(report: ReportResult): string {
   const { rebuiltOsv, after } = report.data;
-  if (rebuiltOsv.status === "unknown") return "unknown, OSV unreachable";
+  const scanned = rebuiltOsv.scannedDependencyCount ?? after.runtimeDependencies;
+  const scope = `rebuild: ${scanned} declared runtime dependencies scanned`;
+  if (rebuiltOsv.status === "unknown") return `unknown, OSV unreachable — ${scope}`;
   if ((rebuiltOsv.advisoryCount ?? 0) === 0) {
-    return `no advisories found across ${rebuiltOsv.scannedDependencyCount ?? after.runtimeDependencies} runtime dependencies`;
+    return `no advisories found across ${scanned} declared runtime dependencies — ${scope}${scanned === 0 ? "; measured result: no advisories found across 0 declared runtime dependencies (no network request made)" : ""}`;
   }
-  return osvSummary(rebuiltOsv);
+  return `${osvSummary(rebuiltOsv)} — ${scope}${identifierSummary(rebuiltOsv)}`;
 }
 
 function printReportSummary(report: ReportResult): void {
@@ -45,7 +58,7 @@ function printReportSummary(report: ReportResult): void {
   const rows: Array<[string, string]> = [
     ["Final generator", resurrection.engine],
     ["Observed fidelity", `${resurrection.passed} of ${resurrection.total} observed behaviors, ${artifact.coverage.branchCoverage.toFixed(2)}% branch coverage of the original`],
-    ["CVEs before", osvSummary(report.data.originalOsv)],
+    ["CVEs before", originalOsvSummary(report)],
     ["CVEs after", rebuiltOsvSummary(report)],
     ["Runtime dependencies", `${before.runtimeDependencies} → ${after.runtimeDependencies}`],
     ["Source LOC", `${before.loc.toLocaleString()} → ${after.loc.toLocaleString()}`],

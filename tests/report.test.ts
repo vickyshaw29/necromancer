@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 
 describe("REPORT OSV client", () => {
-  it("counts advisories and unique CVE aliases from a mocked response", async () => {
+  it("keeps OSV IDs and unique CVE aliases from a mocked response", async () => {
     const result = await queryOsv(
       "report-fixture",
       "1.0.0",
@@ -31,14 +31,35 @@ describe("REPORT OSV client", () => {
         new Response(
           JSON.stringify({
             vulns: [
-              { aliases: ["CVE-2024-1000", "GHSA-example"] },
-              { aliases: ["CVE-2024-1000", "CVE-2023-2000"] }
+              { id: "OSV-2024-1000", aliases: ["CVE-2024-1000", "GHSA-example"] },
+              { id: "OSV-2023-2000", aliases: ["CVE-2024-1000", "CVE-2023-2000"] }
             ]
           })
         )
     );
 
-    expect(result).toEqual({ status: "known", advisoryCount: 2, cveCount: 2 });
+    expect(result).toEqual({
+      status: "known",
+      advisoryCount: 2,
+      cveCount: 2,
+      identifiers: ["OSV-2024-1000", "CVE-2024-1000", "OSV-2023-2000", "CVE-2023-2000"]
+    });
+  });
+
+  it("keeps OSV IDs when an advisory has no CVE alias", async () => {
+    const result = await queryOsv(
+      "report-fixture",
+      "1.0.0",
+      async () => new Response(JSON.stringify({ vulns: [{ id: "OSV-2022-3000" }] }))
+    );
+
+    expect(result).toEqual({ status: "known", advisoryCount: 1, cveCount: 0, identifiers: ["OSV-2022-3000"] });
+  });
+
+  it("reports an empty OSV result without inventing identifiers", async () => {
+    const result = await queryOsv("report-fixture", "1.0.0", async () => new Response(JSON.stringify({ vulns: [] })));
+
+    expect(result).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, identifiers: [] });
   });
 
   it("returns an explicit unknown state when OSV cannot be reached", async () => {
@@ -57,7 +78,7 @@ describe("REPORT OSV client", () => {
     });
 
     expect(calls).toEqual(["rebuilt-dependency@1.2.3"]);
-    expect(result).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, scannedDependencyCount: 1 });
+    expect(result).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, identifiers: [], scannedDependencyCount: 1 });
   });
 
   it("reports zero declared rebuilt dependencies without issuing a request", async () => {
@@ -68,7 +89,7 @@ describe("REPORT OSV client", () => {
     });
 
     expect(calls).toBe(0);
-    expect(result).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, scannedDependencyCount: 0 });
+    expect(result).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, identifiers: [], scannedDependencyCount: 0 });
   });
 });
 
@@ -104,7 +125,9 @@ describe("graveyard HTML", () => {
       artifactDirectory: directory
     };
 
-    const result = await createReport(input, { osvQuery: async () => ({ status: "known", advisoryCount: 1, cveCount: 1 }) });
+    const result = await createReport(input, {
+      osvQuery: async () => ({ status: "known", advisoryCount: 1, cveCount: 1, identifiers: ["OSV-2024-1000", "CVE-2024-1000"] })
+    });
     const html = await readFile(result.reportPath, "utf8");
 
     expect(html).toContain("2 of 2 observed behaviors, 83.33% branch coverage of the original");
@@ -131,10 +154,24 @@ describe("graveyard HTML", () => {
     expect(html).toContain("Second recorded quirk");
     expect(html).toContain("Original source");
     expect(html).toContain("Rebuilt source");
-    expect(html).toContain("no advisories found across 0 runtime dependencies");
+    expect(html).toContain("original: report-fixture@1.0.0, queried at report time; returned identifiers: OSV-2024-1000, CVE-2024-1000");
+    expect(html).toContain("rebuild: 0 declared runtime dependencies scanned; measured result: no advisories found across 0 declared runtime dependencies (no network request made)");
+    expect(html).toContain("no advisories found across 0 declared runtime dependencies");
     expect(html).toContain("REVIVED");
     expect(html).not.toMatch(/(?:src|href)=["']https?:/i);
-    expect(result.data.rebuiltOsv).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, scannedDependencyCount: 0 });
+    expect(result.data.rebuiltOsv).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, identifiers: [], scannedDependencyCount: 0 });
+
+    const noIdentifierHtml = renderGraveyard({
+      ...result.data,
+      originalOsv: { status: "known", advisoryCount: 0, cveCount: 0, identifiers: [] }
+    });
+    const rebuiltIdentifierHtml = renderGraveyard({
+      ...result.data,
+      after: { ...result.data.after, runtimeDependencies: 1 },
+      rebuiltOsv: { status: "known", advisoryCount: 1, cveCount: 0, identifiers: ["OSV-2024-2000"], scannedDependencyCount: 1 }
+    });
+    expect(noIdentifierHtml).not.toContain("returned identifiers:");
+    expect(rebuiltIdentifierHtml).toContain("rebuild: 1 declared runtime dependencies scanned; returned identifiers: OSV-2024-2000");
   });
 
   it("renders the no-quirk fallback and escapes a malicious package name", async () => {
@@ -157,11 +194,13 @@ describe("graveyard HTML", () => {
         resurrection: { packageName: maliciousName, engine: "stub", rounds: [], passed: 0, total: 2, complete: false, resultPath: path.join(directory, "rebuilt", "result.json") },
         artifactDirectory: directory
       },
-      { osvQuery: async () => ({ status: "known", advisoryCount: 0, cveCount: 0 }) }
+      { osvQuery: async () => ({ status: "unknown", detail: "OSV unreachable" }) }
     );
     const html = renderGraveyard(result.data);
 
     expect(html).toContain("No quirk was recorded");
+    expect(html).toContain("unknown, OSV unreachable");
+    expect(html).not.toContain("returned identifiers:");
     expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
     expect(html).not.toContain('<img src=x onerror="alert(1)">');
   });

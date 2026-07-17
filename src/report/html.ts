@@ -52,12 +52,29 @@ function osvText(result: ReportData["originalOsv"]): string {
   return `${result.cveCount ?? 0} CVE aliases across ${result.advisoryCount ?? 0} OSV advisories`;
 }
 
+function identifierText(result: ReportData["originalOsv"]): string {
+  if (result.status === "unknown") return "";
+  const identifiers = result.identifiers ?? [];
+  return identifiers.length > 0 ? `; returned identifiers: ${identifiers.join(", ")}` : "";
+}
+
+function originalOsvScope(data: ReportData): string {
+  return `original: ${data.packageName}@${data.version}, queried at report time${identifierText(data.originalOsv)}`;
+}
+
 function rebuiltOsvText(data: ReportData): string {
   if (data.rebuiltOsv.status === "unknown") return "unknown, OSV unreachable";
   if ((data.rebuiltOsv.advisoryCount ?? 0) === 0) {
-    return `no advisories found across ${data.rebuiltOsv.scannedDependencyCount ?? data.after.runtimeDependencies} runtime dependencies`;
+    return `no advisories found across ${data.rebuiltOsv.scannedDependencyCount ?? data.after.runtimeDependencies} declared runtime dependencies`;
   }
   return osvText(data.rebuiltOsv);
+}
+
+function rebuiltOsvScope(data: ReportData): string {
+  const scanned = data.rebuiltOsv.scannedDependencyCount ?? data.after.runtimeDependencies;
+  const scope = `rebuild: ${scanned} declared runtime dependencies scanned`;
+  if (scanned === 0) return `${scope}; measured result: no advisories found across 0 declared runtime dependencies (no network request made)`;
+  return `${scope}${identifierText(data.rebuiltOsv)}`;
 }
 
 export function renderGraveyard(data: ReportData): string {
@@ -140,8 +157,8 @@ h1 { margin: 0; font-size: clamp(28px, 5vw, 48px); letter-spacing: .05em; overfl
   <h2>Observed fidelity</h2>
   <section class="grid">
     <article class="panel"><div class="label">Rebuild rounds</div><div class="value">${data.resurrection.rounds.length}</div></article>
-    <article class="panel"><div class="label">CVEs / OSV before</div><div class="value ${data.originalOsv.status === "unknown" ? "warning" : ""}">${escapeHtml(osvText(data.originalOsv))}</div></article>
-    <article class="panel"><div class="label">CVEs / OSV after</div><div class="value ${data.rebuiltOsv.status === "unknown" ? "warning" : "after"}">${escapeHtml(rebuiltOsvText(data))}</div></article>
+    <article class="panel"><div class="label">CVEs / OSV before</div><div class="value ${data.originalOsv.status === "unknown" ? "warning" : ""}">${escapeHtml(osvText(data.originalOsv))}</div><p class="muted">${escapeHtml(originalOsvScope(data))}</p></article>
+    <article class="panel"><div class="label">CVEs / OSV after</div><div class="value ${data.rebuiltOsv.status === "unknown" ? "warning" : "after"}">${escapeHtml(rebuiltOsvText(data))}</div><p class="muted">${escapeHtml(rebuiltOsvScope(data))}</p></article>
   </section>
 
   <h2>Source comparison</h2>

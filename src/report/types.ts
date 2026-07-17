@@ -6,6 +6,7 @@ export interface OsvAdvisoryResult {
   status: "known" | "unknown";
   advisoryCount?: number;
   cveCount?: number;
+  identifiers?: string[];
   detail?: string;
   scannedDependencyCount?: number;
 }
