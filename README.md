@@ -79,6 +79,22 @@ A ten-package sweep with the deterministic heuristic planner (`probe --fast --en
 
 Every run ended with either a recorded artifact or the friendly scope message — no hangs and no raw stack traces. `--fast` caps recording at 60 behaviors, which several targets reached; the API and Codex planners typically discover more semantic inputs than the heuristic used here.
 
+### Live resurrection results (2026-07-17)
+
+Full `resurrect <pkg> --engine codex` runs on the same day, each rebuilding from observed behavior only. These are the observed results of these runs, not a guarantee.
+
+| Target | Rounds | Observed fidelity | Branch coverage of original | Source LOC | Runtime deps |
+| --- | --- | --- | --- | --- | --- |
+| `deep-extend@0.5.0` | 1 | 53 of 53 | 83.33% | 145 → 35 | 0 → 0 |
+| `object-assign@4.1.1` | 2 | 80 of 80 | 45.45% | 90 → 19 | 0 → 0 |
+| `arr-diff@4.0.0` | 2 | 55 of 55 | 66.66% | 47 → 5 | 0 → 0 |
+| `dedent@1.7.2` | 1 | 80 of 80 | 53.84% | 251 → 49 | 0 → 0 |
+| `is-plain-object@5.0.0` | 2 | 53 of 53 | 75.00% | 72 → 15 | 0 → 0 |
+| `ms@2.1.3` | 3 | 80 of 80 | 58.18% | 162 → 96 | 0 → 0 |
+| `is-odd@3.0.1` | 1 | 67 of 67 | 71.42% | — | 1 → 0 |
+
+An earlier `object-assign` run ended capped at 59 of 60 with exit code 3 — the mismatch traced to a probe serializer defect, which was fixed with a regression test before the 80 of 80 rerun above. Capped runs report their differences; they are not presented as successes.
+
 ## Platforms and isolation
 
 Supported platforms are macOS, Linux, and Windows with Node 20+. Docker is optional: it isolates the bare package install and inspection step when available. Behavioral probing always uses the reduced-isolation child process because V8 coverage must write locally; that runner scrubs its environment and blocks common network and process-control modules, but it is not full containment. Run untrusted packages on a disposable machine or VM.
