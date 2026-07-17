@@ -2,7 +2,7 @@ import { access, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises"
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { processFailure, runProcess } from "./process.js";
+import { processFailure, runProcess } from "../process.js";
 
 const MAX_SOURCE_CHARS = 200_000;
 

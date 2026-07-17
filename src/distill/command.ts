@@ -1,6 +1,6 @@
 import path from "node:path";
 import { createProbeArtifactDirectory, findLatestProbeArtifact } from "../artifacts.js";
-import { discardExhumedPackage, exhume, ScopeReason } from "../exhume/index.js";
+import { discardExhumedPackage, exhume, reportOutOfScope } from "../exhume/index.js";
 import { loadDotEnv, probePackage, ProbeEnginePreference } from "../probe/index.js";
 import { createSandboxRunner, SandboxRunner } from "../sandbox/index.js";
 import { printBanner, printPhase } from "../terminal.js";
@@ -10,14 +10,6 @@ import { DistillEnginePreference } from "./types.js";
 
 type CommandEngine = DistillEnginePreference & ProbeEnginePreference;
 
-function scopeMessage(reasons: ScopeReason[]): string {
-  const detail = reasons.map((reason) => reason.message).join("; ");
-  return [
-    `This corpse is beyond v1 necromancy: ${detail}.`,
-    "v1 supports small (<=2,000 LOC), pure-JS, mostly-pure npm packages with <=3 runtime dependencies."
-  ].join(" ");
-}
-
 export interface ProbeArtifactOptions {
   maxBehaviors: number;
   fast?: boolean;
@@ -26,6 +18,7 @@ export interface ProbeArtifactOptions {
 
 export async function probeIntoArtifact(
   packageName: string,
+  version: string,
   packagePath: string,
   artifactDirectory: string,
   options: ProbeArtifactOptions
@@ -41,7 +34,7 @@ export async function probeIntoArtifact(
     printPhase(3, "PROBE", "Discovering deterministic observed behaviors…");
     const maxBehaviors = options.fast ? Math.min(options.maxBehaviors, 60) : options.maxBehaviors;
     await probePackage(
-      { packageName, packagePath, sandbox, artifactDirectory },
+      { packageName, version, packagePath, sandbox, artifactDirectory },
       { maxBehaviors, fast: options.fast, engine: options.engine, onNotice: (message) => console.error(message) }
     );
   } finally {
@@ -67,8 +60,7 @@ export async function runDistillCommand(pkg: string, options: DistillCommandOpti
     console.log(`  Package              ${exhumed.manifest.name}@${exhumed.manifest.version}`);
     console.log(`  Verdict              ${exhumed.triage.verdict}`);
     if (exhumed.triage.verdict === "OUT_OF_SCOPE") {
-      console.log(`\nOUT_OF_SCOPE — ${scopeMessage(exhumed.triage.reasons)}`);
-      process.exitCode = 2;
+      reportOutOfScope(exhumed.triage.reasons);
       return;
     }
 
@@ -77,7 +69,7 @@ export async function runDistillCommand(pkg: string, options: DistillCommandOpti
       printPhase(3, "PROBE", `Reusing ${path.join(artifactDirectory, "behaviors.json")}`);
     } else {
       artifactDirectory = await createProbeArtifactDirectory(exhumed.manifest.name, exhumed.manifest.version);
-      await probeIntoArtifact(exhumed.manifest.name, exhumed.packagePath, artifactDirectory, options);
+      await probeIntoArtifact(exhumed.manifest.name, exhumed.manifest.version, exhumed.packagePath, artifactDirectory, options);
     }
     const artifact = await readProbeArtifact(path.join(artifactDirectory, "behaviors.json"));
     printPhase(4, "DISTILL", "Writing SOUL.md and deterministic characterization tests…");

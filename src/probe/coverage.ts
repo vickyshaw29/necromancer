@@ -1,25 +1,10 @@
 import { mkdir, readFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { processFailure, runProcess } from "../process.js";
 import { CoverageSummary } from "./types.js";
 
 const require = createRequire(import.meta.url);
-
-async function command(command: string, args: string[], cwd: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-    let stderr = "";
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`c8 report exited with ${code}: ${stderr.trim().slice(0, 500)}`));
-    });
-  });
-}
 
 function percentage(summary: Record<string, unknown>, key: string): number {
   const entry = summary[key] as { pct?: unknown } | undefined;
@@ -36,7 +21,7 @@ export async function collectCoverage(
   try {
     await mkdir(reportsDirectory, { recursive: true });
     const c8Bin = require.resolve("c8/bin/c8.js");
-    await command(
+    const report = await runProcess(
       process.execPath,
       [
         c8Bin,
@@ -50,8 +35,9 @@ export async function collectCoverage(
         "--include",
         `${path.basename(sourceDirectory)}/**`
       ],
-      path.dirname(sourceDirectory)
+      { cwd: path.dirname(sourceDirectory), timeoutMs: 30_000, maxOutputChars: 500 }
     );
+    if (report.code !== 0) throw processFailure("c8 report", report);
     const summary = JSON.parse(await readFile(path.join(reportsDirectory, "coverage-summary.json"), "utf8")) as {
       total?: Record<string, unknown>;
     };

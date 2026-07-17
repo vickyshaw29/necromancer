@@ -2,15 +2,12 @@ import { access, readFile, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { processFailure, runProcess } from "./process.js";
+import { isRecord } from "../json.js";
+import { processFailure, runProcess } from "../process.js";
 import { CharacterizationResult, TestFailure } from "./types.js";
 
 const MAX_REPORT_BYTES = 512 * 1024;
 const TEST_ENVIRONMENT_KEYS = ["PATH", "SystemRoot", "SYSTEMROOT", "ComSpec", "PATHEXT", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 async function exists(filePath: string): Promise<boolean> {
   try {

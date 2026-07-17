@@ -58,6 +58,17 @@ describe("REPORT OSV client", () => {
     expect(calls).toEqual(["rebuilt-dependency@1.2.3"]);
     expect(result).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, scannedDependencyCount: 1 });
   });
+
+  it("reports zero declared rebuilt dependencies without issuing a request", async () => {
+    let calls = 0;
+    const result = await queryOsvDependencies([], async () => {
+      calls += 1;
+      return { status: "unknown", detail: "OSV unreachable" };
+    });
+
+    expect(calls).toBe(0);
+    expect(result).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, scannedDependencyCount: 0 });
+  });
 });
 
 describe("graveyard HTML", () => {

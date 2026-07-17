@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { mkdir, mkdtemp } from "node:fs/promises";
-import path from "node:path";
 import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { createProbeArtifactDirectory } from "./artifacts.js";
 import { distillEngine, runDistillCommand } from "./distill/command.js";
-import { discardExhumedPackage, exhume, ScopeReason, TriageResult } from "./exhume/index.js";
+import { discardExhumedPackage, exhume, reportOutOfScope, TriageResult } from "./exhume/index.js";
 import { loadDotEnv, probePackage, ProbeEnginePreference } from "./probe/index.js";
 import { resurrectEngine, runResurrectCommand } from "./resurrect/command.js";
 import { createSandboxRunner, SandboxRunner } from "./sandbox/index.js";
@@ -34,14 +34,6 @@ function printTriage(name: string, version: string, triage: TriageResult): void 
   if (triage.networkImports.length > 0) console.log(`  Network evidence       ${triage.networkImports.join(", ")}`);
 }
 
-function scopeMessage(reasons: ScopeReason[]): string {
-  const detail = reasons.map((reason) => reason.message).join("; ");
-  return [
-    `This corpse is beyond v1 necromancy: ${detail}.`,
-    "v1 supports small (<=2,000 LOC), pure-JS, mostly-pure npm packages with <=3 runtime dependencies."
-  ].join(" ");
-}
-
 function positiveInteger(value: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error("--max-behaviors must be a positive integer.");
@@ -51,21 +43,6 @@ function positiveInteger(value: string): number {
 function probeEngine(value: string): ProbeEnginePreference {
   if (value === "auto" || value === "api" || value === "codex" || value === "heuristic") return value;
   throw new Error("--engine must be one of: auto, api, codex, heuristic.");
-}
-
-function safeArtifactName(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "package";
-}
-
-async function probeArtifactDirectory(packageName: string, version: string, output?: string): Promise<string> {
-  if (output) {
-    const directory = path.resolve(output);
-    await mkdir(directory, { recursive: true });
-    return directory;
-  }
-  const base = path.join(process.cwd(), ".necromancer-cache", "probes");
-  await mkdir(base, { recursive: true });
-  return mkdtemp(path.join(base, `${safeArtifactName(`${packageName}-${version}`)}-`));
 }
 
 async function runProbeCommand(
@@ -80,12 +57,11 @@ async function runProbeCommand(
   try {
     printTriage(exhumed.manifest.name, exhumed.manifest.version, exhumed.triage);
     if (exhumed.triage.verdict === "OUT_OF_SCOPE") {
-      console.log(`\nOUT_OF_SCOPE — ${scopeMessage(exhumed.triage.reasons)}`);
-      process.exitCode = 2;
+      reportOutOfScope(exhumed.triage.reasons);
       return;
     }
 
-    const artifactDirectory = await probeArtifactDirectory(exhumed.manifest.name, exhumed.manifest.version, options.output);
+    const artifactDirectory = await createProbeArtifactDirectory(exhumed.manifest.name, exhumed.manifest.version, options.output);
     const coverageDirectory = path.join(artifactDirectory, ".v8-coverage");
     printPhase(2, "SANDBOX", "Preparing child-process instrumentation for coverage…");
     sandbox = await createSandboxRunner(
@@ -97,6 +73,7 @@ async function runProbeCommand(
     const result = await probePackage(
       {
         packageName: exhumed.manifest.name,
+        version: exhumed.manifest.version,
         packagePath: exhumed.packagePath,
         sandbox,
         artifactDirectory
@@ -138,8 +115,7 @@ export async function runCli(argv: string[]): Promise<void> {
       try {
         printTriage(exhumed.manifest.name, exhumed.manifest.version, exhumed.triage);
         if (exhumed.triage.verdict === "OUT_OF_SCOPE") {
-          console.log(`\nOUT_OF_SCOPE — ${scopeMessage(exhumed.triage.reasons)}`);
-          process.exitCode = 2;
+          reportOutOfScope(exhumed.triage.reasons);
           return;
         }
 

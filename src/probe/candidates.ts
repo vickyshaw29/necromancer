@@ -4,6 +4,10 @@ import { DiscoveryResult, FunctionInputPlan, InputCandidate, InputPlan } from ".
 
 const INPUT_TAG = "$necromancer";
 
+function hasInputTag(value: Record<string, JsonSafeValue>): boolean {
+  return Object.prototype.hasOwnProperty.call(value, INPUT_TAG);
+}
+
 function prototypePayload(): Record<string, unknown> {
   return JSON.parse('{"__proto__":{"necromancerProbe":true},"constructor":{"prototype":{"polluted":true}}}') as Record<string, unknown>;
 }
@@ -46,7 +50,7 @@ export function toArtifactValue(value: unknown, ancestors = new WeakMap<object, 
     if (Array.isArray(value)) return value.map((item, index) => toArtifactValue(item, ancestors, `${valuePath}[${index}]`));
     const output: Record<string, JsonSafeValue> = Object.create(null);
     for (const [key, item] of Object.entries(value)) output[key] = toArtifactValue(item, ancestors, `${valuePath}.${key}`);
-    return output;
+    return hasInputTag(output) ? { [INPUT_TAG]: "object", value: output } : output;
   } finally {
     ancestors.delete(value);
   }

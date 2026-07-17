@@ -49,6 +49,7 @@ describe("PROBE", () => {
     const result = await probePackage(
       {
         packageName: "sandbox-edge-package",
+        version: "1.0.0",
         packagePath: fixturePath,
         sandbox: runner,
         artifactDirectory

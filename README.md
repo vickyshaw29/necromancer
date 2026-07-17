@@ -32,6 +32,13 @@ Set an API key in the shell or a gitignored `.env` file:
 OPENAI_API_KEY=your-key-here
 ```
 
+## Demo corpses
+
+- `deep-extend` is an in-scope package with a published, later-fixed security advisory. It is useful for demonstrating the scanner: OSV queries the selected original package version, while a zero-runtime-dependency reconstruction is scanned separately and reports no advisories across 0 runtime dependencies.
+- `left-pad` is a small no-advisory comparison target. Its report demonstrates that “no advisories found” is shown only when the scan measures that result.
+
+Advisory counts are queried at report time; this tool does not hardcode a before/after advisory outcome.
+
 ## v1 scope
 
 | In scope | Out of scope in v1 |

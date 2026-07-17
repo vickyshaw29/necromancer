@@ -1,10 +1,10 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "../json.js";
+import { requestStructuredOutput } from "../openai.js";
 import { codexAvailable } from "../probe/index.js";
-import { runProcess } from "./process.js";
+import { runProcess } from "../process.js";
 import { RebuildEnginePreference, RebuildGenerator, RebuildRequest } from "./types.js";
-
-const MODEL = "gpt-5.6";
 
 const REBUILD_SCHEMA = {
   type: "object",
@@ -18,10 +18,6 @@ export class RebuildEngineUnavailableError extends Error {
     super(message);
     this.name = "RebuildEngineUnavailableError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function sourceFrom(value: unknown): string {
@@ -47,34 +43,18 @@ function promptFor(request: RebuildRequest): string {
   ].join("\n\n");
 }
 
-function outputText(response: unknown): string | undefined {
-  if (!isRecord(response)) return undefined;
-  if (typeof response.output_text === "string") return response.output_text;
-  if (!Array.isArray(response.output)) return undefined;
-  for (const item of response.output) {
-    if (!isRecord(item) || !Array.isArray(item.content)) continue;
-    for (const content of item.content) if (isRecord(content) && typeof content.text === "string") return content.text;
-  }
-  return undefined;
-}
-
 export function createApiRebuildGenerator(apiKey: string, request: typeof fetch = fetch): RebuildGenerator {
   return {
     name: "api",
     async generate(rebuildRequest): Promise<string> {
-      const response = await request("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          model: MODEL,
-          input: promptFor(rebuildRequest),
-          text: { format: { type: "json_schema", name: "rebuilt_typescript", strict: false, schema: REBUILD_SCHEMA } }
-        }),
-        signal: AbortSignal.timeout(90_000)
+      const output = await requestStructuredOutput({
+        apiKey,
+        input: promptFor(rebuildRequest),
+        schemaName: "rebuilt_typescript",
+        schema: REBUILD_SCHEMA,
+        timeoutMs: 90_000,
+        request
       });
-      if (!response.ok) throw new Error(`OpenAI API responded with ${response.status}.`);
-      const output = outputText(await response.json());
-      if (!output) throw new Error("OpenAI API response had no structured output text.");
       return sourceFrom(JSON.parse(output));
     }
   };

@@ -1,13 +1,10 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "../json.js";
 import { DeclaredRuntimeDependency, RebuiltSourceMetrics } from "./types.js";
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 const IGNORED_DIRECTORIES = new Set(["dist", "node_modules", ".git"]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function lineCount(source: string): number {
   if (!source) return 0;

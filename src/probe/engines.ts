@@ -1,12 +1,11 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { requestStructuredOutput } from "../openai.js";
+import { runCheckedProcess } from "../process.js";
 import { DiscoveryResult, InputPlan, InputPlanEngine, PlanRequest, ProbeEnginePreference } from "./types.js";
 import { heuristicInputPlan } from "./candidates.js";
 export { loadDotEnv } from "./env.js";
-
-const MODEL = "gpt-5.6";
 
 const PLAN_SCHEMA = {
   type: "object",
@@ -51,16 +50,6 @@ function promptFor(request: PlanRequest): string {
   ].join("\n\n");
 }
 
-function outputText(response: unknown): string | undefined {
-  if (!response || typeof response !== "object") return undefined;
-  const object = response as { output_text?: unknown; output?: Array<{ content?: Array<{ text?: unknown }> }> };
-  if (typeof object.output_text === "string") return object.output_text;
-  for (const item of object.output ?? []) {
-    for (const content of item.content ?? []) if (typeof content.text === "string") return content.text;
-  }
-  return undefined;
-}
-
 function validatePlan(value: unknown, request: PlanRequest): InputPlan {
   if (!value || typeof value !== "object" || !Array.isArray((value as { functions?: unknown }).functions)) {
     throw new Error("Model response did not contain an input plan.");
@@ -83,29 +72,6 @@ function validatePlan(value: unknown, request: PlanRequest): InputPlan {
   return { functions };
 }
 
-async function command(command: string, args: string[], cwd: string, timeoutMs: number): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-    let stderr = "";
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`${command} exceeded its ${timeoutMs} ms limit.`));
-    }, timeoutMs);
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      if (code === 0) resolve();
-      else reject(new Error(`${command} exited with ${code}: ${stderr.trim().slice(0, 500)}`));
-    });
-  });
-}
-
 export function createHeuristicEngine(discovery: DiscoveryResult): InputPlanEngine {
   return {
     name: "heuristic",
@@ -119,19 +85,14 @@ export function createApiEngine(apiKey: string, request: typeof fetch = fetch): 
   return {
     name: "api",
     async generate(planRequest: PlanRequest): Promise<InputPlan> {
-      const response = await request("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          model: MODEL,
-          input: promptFor(planRequest),
-          text: { format: { type: "json_schema", name: "probe_input_plan", strict: false, schema: PLAN_SCHEMA } }
-        }),
-        signal: AbortSignal.timeout(60_000)
+      const text = await requestStructuredOutput({
+        apiKey,
+        input: promptFor(planRequest),
+        schemaName: "probe_input_plan",
+        schema: PLAN_SCHEMA,
+        timeoutMs: 60_000,
+        request
       });
-      if (!response.ok) throw new Error(`OpenAI API responded with ${response.status}.`);
-      const text = outputText(await response.json());
-      if (!text) throw new Error("OpenAI API response had no structured output text.");
       return validatePlan(JSON.parse(text), planRequest);
     }
   };
@@ -139,7 +100,7 @@ export function createApiEngine(apiKey: string, request: typeof fetch = fetch): 
 
 export async function codexAvailable(): Promise<boolean> {
   try {
-    await command("codex", ["--version"], process.cwd(), 5_000);
+    await runCheckedProcess("codex", ["--version"], { cwd: process.cwd(), timeoutMs: 5_000, maxOutputChars: 500 });
     return true;
   } catch {
     return false;
@@ -155,7 +116,7 @@ export function createCodexEngine(): InputPlanEngine {
       const outputPath = path.join(root, "input-plan.json");
       try {
         await writeFile(schemaPath, `${JSON.stringify(PLAN_SCHEMA)}\n`, "utf8");
-        await command(
+        await runCheckedProcess(
           "codex",
           [
             "exec",
@@ -171,8 +132,7 @@ export function createCodexEngine(): InputPlanEngine {
             outputPath,
             promptFor(planRequest)
           ],
-          planRequest.packagePath,
-          90_000
+          { cwd: planRequest.packagePath, timeoutMs: 90_000, maxOutputChars: 500 }
         );
         return validatePlan(JSON.parse(await readFile(outputPath, "utf8")), planRequest);
       } finally {

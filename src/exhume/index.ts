@@ -7,6 +7,7 @@ import { triagePackage } from "./triage.js";
 import { ExhumedPackage, NpmPackageManifest, PackageSpec } from "./types.js";
 
 export * from "./registry.js";
+export * from "./scope.js";
 export * from "./tar.js";
 export * from "./triage.js";
 export * from "./types.js";

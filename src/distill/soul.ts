@@ -1,4 +1,5 @@
 import { ProbeBehavior } from "../probe/index.js";
+import { isRecord } from "../json.js";
 import { SoulRequest } from "./types.js";
 
 type Cluster = "Typical inputs" | "Boundary and empty inputs" | "Coercion and type chaos" | "Adversarial object inputs" | "Errors";
@@ -30,12 +31,16 @@ function outcome(behavior: ProbeBehavior): string {
   return `returned ${stringify(behavior.result)}`;
 }
 
+function returnsTaggedUndefined(behavior: ProbeBehavior): boolean {
+  return isRecord(behavior.result) && behavior.result.$necromancer === "undefined";
+}
+
 function isQuirk(behavior: ProbeBehavior): boolean {
   return (
     !!behavior.throw ||
     contains(behavior.args, "__proto__") ||
     contains(behavior.args, "$necromancer") ||
-    behavior.result === "undefined" ||
+    returnsTaggedUndefined(behavior) ||
     contains(behavior.result, "polluted")
   );
 }
@@ -43,7 +48,7 @@ function isQuirk(behavior: ProbeBehavior): boolean {
 function quirkName(behavior: ProbeBehavior): string {
   if (contains(behavior.args, "__proto__") || contains(behavior.args, "constructor")) return "Unusual property-key input";
   if (behavior.throw) return "Exact error behavior";
-  if (behavior.result === "undefined") return "Undefined coercion";
+  if (returnsTaggedUndefined(behavior)) return "Undefined coercion";
   return "Type coercion behavior";
 }
 

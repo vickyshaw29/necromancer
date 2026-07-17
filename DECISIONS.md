@@ -27,3 +27,7 @@
 2026-07-17 — V8 coverage keeps behavioral probing in the reduced-isolation child runner; Docker is described only as isolation for the bare install and inspection step, and the runner blocks network plus process-control module loads without claiming full containment.
 2026-07-17 — REPORT scans rebuilt declared runtime dependencies through the same OSV query path as the original; an empty declaration produces the measured result “no advisories found across 0 runtime dependencies.”
 2026-07-17 — EXHUME retains native-module evidence from all tarball files but excludes test, example, benchmark, documentation directories and `.d.ts` files from runtime LOC and I/O scope markers.
+2026-07-17 — Probe artifacts carry the resolved version and use a short hash of the exact `name@version` in their directory identity; cache reuse also validates both fields in `behaviors.json` before selecting the newest artifact.
+2026-07-17 — Argument artifacts escape ordinary objects that contain the `$necromancer` tag key, while emitted tests revive only exact sentinels; this preserves literal data keys without changing established special-value tags.
+2026-07-17 — OpenAI structured-output requests and guarded child-process execution are shared because each has three or more concrete pipeline callers; c8 reporting now has the same bounded process behavior.
+2026-07-17 — A rebuilt package with no declared runtime dependencies completes the OSV scan locally without a network request; non-empty scans retain the per-request 10-second fallback behavior.

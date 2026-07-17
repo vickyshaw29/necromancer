@@ -1,9 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "./json.js";
 
 async function stagedManifest(packageDirectory: string): Promise<Record<string, unknown>> {
   const manifestPath = path.join(packageDirectory, "package.json");

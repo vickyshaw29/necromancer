@@ -91,6 +91,7 @@ export async function probePackage(target: ProbeTarget, options: ProbeOptions): 
       };
   const result: ProbeResult = {
     packageName: target.packageName,
+    version: target.version,
     engine: generated.engine,
     surface: discovery.surface,
     examples: discovery.examples,

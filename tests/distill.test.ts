@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApiSoulEngine, distillArtifact, renderHeuristicSoul, renderSoulTest } from "../src/distill/index.js";
 import type { ProbeArtifact, SoulRequest } from "../src/distill/index.js";
+import { toArtifactValue } from "../src/probe/candidates.js";
 import type { JsonSafeValue } from "../src/sandbox/index.js";
 
 const fixturesPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -15,6 +16,7 @@ const unusualKeyInput: JsonSafeValue = {
   ["__proto__"]: { recorded: true },
   constructor: { note: "input" }
 };
+const tagKeyInput = toArtifactValue({ $necromancer: "undefined", note: "literal input data" });
 
 const artifact: ProbeArtifact = {
   packageName: "sandbox-edge-package",
@@ -40,6 +42,12 @@ const artifact: ProbeArtifact = {
       fn: "sandbox-edge-package",
       args: ["map"],
       result: { $necromancer: "map", entries: [["key", 1]] }
+    },
+    {
+      id: "behavior-0007",
+      fn: "sandbox-edge-package",
+      args: [tagKeyInput],
+      result: { kind: { $necromancer: "undefined", note: "literal input data" } }
     }
   ]
 };
@@ -91,7 +99,7 @@ describe("DISTILL", () => {
     const [soul, firstTestSource] = await Promise.all([readFile(result.soulPath, "utf8"), readFile(result.testPath, "utf8")]);
 
     expect(result.engine).toBe("heuristic");
-    expect(soul).toContain("This specification covers 6 observed behaviors, 42.50% branch coverage of the original.");
+    expect(soul).toContain("This specification covers 7 observed behaviors, 42.50% branch coverage of the original.");
     expect(soul).toContain("## Behavioral clusters");
     expect(soul).toContain("#### Typical inputs");
     expect(soul).toContain("#### Coercion and type chaos");
@@ -99,13 +107,15 @@ describe("DISTILL", () => {
     expect(soul).toContain("#### Errors");
     expect(soul).toContain("## Quirks");
     expect(soul).toContain("Unusual property-key input");
+    expect(soul).toContain("Undefined coercion");
+    expect(tagKeyInput).toEqual({ $necromancer: "object", value: { $necromancer: "undefined", note: "literal input data" } });
     for (const behavior of artifact.behaviors) expect(soul).toContain(behavior.id);
     expect(firstTestSource).toBe(renderSoulTest(artifact));
     expect(renderSoulTest(artifact)).toBe(renderSoulTest(artifact));
 
     const suite = await runGeneratedSuite(directory);
     expect(suite.code, suite.output).toBe(0);
-    expect(suite.output).toContain("6 passed");
+    expect(suite.output).toContain("7 passed");
   });
 
   it("validates structured API prose with an offline fixture response", async () => {

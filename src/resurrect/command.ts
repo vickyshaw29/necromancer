@@ -4,21 +4,13 @@ import path from "node:path";
 import { createProbeArtifactDirectory, findLatestProbeArtifact } from "../artifacts.js";
 import { distillArtifact, readProbeArtifact } from "../distill/index.js";
 import { probeIntoArtifact } from "../distill/command.js";
-import { discardExhumedPackage, exhume, ScopeReason } from "../exhume/index.js";
+import { discardExhumedPackage, exhume, reportOutOfScope } from "../exhume/index.js";
 import { loadDotEnv } from "../probe/index.js";
 import { createReport, ReportResult } from "../report/index.js";
 import { RebuildEngineUnavailableError, selectRebuildGenerator } from "./engines.js";
 import { resurrectArtifact } from "./loop.js";
 import { RebuildEnginePreference } from "./types.js";
 import { printBanner, printPhase, printSuccess } from "../terminal.js";
-
-function scopeMessage(reasons: ScopeReason[]): string {
-  const detail = reasons.map((reason) => reason.message).join("; ");
-  return [
-    `This corpse is beyond v1 necromancy: ${detail}.`,
-    "v1 supports small (<=2,000 LOC), pure-JS, mostly-pure npm packages with <=3 runtime dependencies."
-  ].join(" ");
-}
 
 async function readable(filePath: string): Promise<boolean> {
   try {
@@ -83,8 +75,7 @@ export async function runResurrectCommand(pkg: string, options: ResurrectCommand
     console.log(`  Package              ${exhumed.manifest.name}@${exhumed.manifest.version}`);
     console.log(`  Verdict              ${exhumed.triage.verdict}`);
     if (exhumed.triage.verdict === "OUT_OF_SCOPE") {
-      console.log(`\nOUT_OF_SCOPE — ${scopeMessage(exhumed.triage.reasons)}`);
-      process.exitCode = 2;
+      reportOutOfScope(exhumed.triage.reasons);
       return;
     }
 
@@ -103,7 +94,7 @@ export async function runResurrectCommand(pkg: string, options: ResurrectCommand
     let artifactDirectory = await findLatestProbeArtifact(exhumed.manifest.name, exhumed.manifest.version);
     if (!artifactDirectory) {
       artifactDirectory = await createProbeArtifactDirectory(exhumed.manifest.name, exhumed.manifest.version);
-      await probeIntoArtifact(exhumed.manifest.name, exhumed.packagePath, artifactDirectory, options);
+      await probeIntoArtifact(exhumed.manifest.name, exhumed.manifest.version, exhumed.packagePath, artifactDirectory, options);
     } else {
       printPhase(3, "PROBE", `Reusing ${path.join(artifactDirectory, "behaviors.json")}`);
     }

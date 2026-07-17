@@ -137,6 +137,7 @@ async function runCommand(command: string, args: string[], options: CommandOptio
       finish(() => reject(new SandboxProcessError(`${command} exited with ${status}${detail ? `: ${detail}` : "."}`)));
     });
 
+    child.stdin.on("error", (error) => finish(() => reject(new SandboxProcessError(`Could not write to ${command}: ${error.message}`))));
     if (options.input !== undefined) child.stdin.end(options.input);
     else child.stdin.end();
   });

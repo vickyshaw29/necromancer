@@ -6,6 +6,7 @@ export type DistillEnginePreference = DistillEngineName | "auto";
 
 export interface ProbeArtifact {
   packageName: string;
+  version?: string;
   behaviors: ProbeBehavior[];
   coverage: CoverageSummary;
   surface?: ModuleSurface;

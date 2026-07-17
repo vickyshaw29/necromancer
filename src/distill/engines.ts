@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
 import path from "node:path";
+import { isRecord } from "../json.js";
+import { requestStructuredOutput } from "../openai.js";
+import { runCheckedProcess } from "../process.js";
 import { codexAvailable } from "../probe/index.js";
 import { renderHeuristicSoul } from "./soul.js";
 import { DistillEnginePreference, SoulEngine, SoulRequest } from "./types.js";
 
-const MODEL = "gpt-5.6";
 const MAX_EVIDENCE_CHARS = 48_000;
 
 const SOUL_SCHEMA = {
@@ -14,10 +15,6 @@ const SOUL_SCHEMA = {
   required: ["soulMarkdown"],
   properties: { soulMarkdown: { type: "string" } }
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function describe(value: unknown): string {
   const serialized = JSON.stringify(value);
@@ -51,17 +48,6 @@ function promptFor(request: SoulRequest): string {
   ].join("\n\n");
 }
 
-function outputText(response: unknown): string | undefined {
-  if (!isRecord(response)) return undefined;
-  if (typeof response.output_text === "string") return response.output_text;
-  if (!Array.isArray(response.output)) return undefined;
-  for (const item of response.output) {
-    if (!isRecord(item) || !Array.isArray(item.content)) continue;
-    for (const content of item.content) if (isRecord(content) && typeof content.text === "string") return content.text;
-  }
-  return undefined;
-}
-
 function validateSoul(value: unknown, request: SoulRequest): string {
   if (!isRecord(value) || typeof value.soulMarkdown !== "string") throw new Error("Model response did not contain a Markdown soul.");
   const markdown = value.soulMarkdown.trim();
@@ -82,32 +68,6 @@ function validateSoul(value: unknown, request: SoulRequest): string {
   return `${markdown}\n`;
 }
 
-async function runCommand(command: string, args: string[], cwd: string, timeoutMs: number): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
-    let settled = false;
-    let stderr = "";
-    const finish = (callback: () => void): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      callback();
-    };
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(() => reject(new Error(`${command} exceeded its ${timeoutMs} ms limit.`)));
-    }, timeoutMs);
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (stderr.length < 500) stderr += chunk.toString("utf8").slice(0, 500 - stderr.length);
-    });
-    child.on("error", (error) => finish(() => reject(error)));
-    child.on("close", (code) => {
-      if (code === 0) finish(resolve);
-      else finish(() => reject(new Error(`${command} exited with ${code}: ${stderr.trim() || "no error output"}`)));
-    });
-  });
-}
-
 export function createHeuristicSoulEngine(): SoulEngine {
   return { name: "heuristic", async generate(request): Promise<string> { return renderHeuristicSoul(request); } };
 }
@@ -116,19 +76,14 @@ export function createApiSoulEngine(apiKey: string, request: typeof fetch = fetc
   return {
     name: "api",
     async generate(soulRequest): Promise<string> {
-      const response = await request("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          model: MODEL,
-          input: promptFor(soulRequest),
-          text: { format: { type: "json_schema", name: "distilled_soul", strict: false, schema: SOUL_SCHEMA } }
-        }),
-        signal: AbortSignal.timeout(60_000)
+      const text = await requestStructuredOutput({
+        apiKey,
+        input: promptFor(soulRequest),
+        schemaName: "distilled_soul",
+        schema: SOUL_SCHEMA,
+        timeoutMs: 60_000,
+        request
       });
-      if (!response.ok) throw new Error(`OpenAI API responded with ${response.status}.`);
-      const text = outputText(await response.json());
-      if (!text) throw new Error("OpenAI API response had no structured output text.");
       return validateSoul(JSON.parse(text), soulRequest);
     }
   };
@@ -145,7 +100,7 @@ export function createCodexSoulEngine(): SoulEngine {
       const outputPath = path.join(directory, "soul.json");
       try {
         await writeFile(schemaPath, `${JSON.stringify(SOUL_SCHEMA)}\n`, "utf8");
-        await runCommand(
+        await runCheckedProcess(
           "codex",
           [
             "exec",
@@ -161,8 +116,7 @@ export function createCodexSoulEngine(): SoulEngine {
             outputPath,
             promptFor(request)
           ],
-          process.cwd(),
-          90_000
+          { cwd: process.cwd(), timeoutMs: 90_000, maxOutputChars: 500 }
         );
         return validateSoul(JSON.parse(await readFile(outputPath, "utf8")), request);
       } finally {

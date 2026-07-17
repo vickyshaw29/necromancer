@@ -64,6 +64,7 @@ export interface CoverageSummary {
 
 export interface ProbeResult {
   packageName: string;
+  version: string;
   engine: string;
   surface: ModuleSurface;
   examples: ExampleCall[];
@@ -83,6 +84,7 @@ export interface ProbeOptions {
 
 export interface ProbeTarget {
   packageName: string;
+  version: string;
   packagePath: string;
   sandbox: SandboxRunner;
   artifactDirectory: string;

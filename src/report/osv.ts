@@ -1,10 +1,7 @@
+import { isRecord } from "../json.js";
 import { DeclaredRuntimeDependency, OsvAdvisoryResult } from "./types.js";
 
 const OSV_QUERY_URL = "https://api.osv.dev/v1/query";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function parseOsv(value: unknown): OsvAdvisoryResult {
   if (!isRecord(value) || !Array.isArray(value.vulns)) return { status: "known", advisoryCount: 0, cveCount: 0 };
@@ -40,6 +37,9 @@ export async function queryOsvDependencies(
   dependencies: DeclaredRuntimeDependency[],
   query: OsvQuery = queryOsv
 ): Promise<OsvAdvisoryResult> {
+  if (dependencies.length === 0) {
+    return { status: "known", advisoryCount: 0, cveCount: 0, scannedDependencyCount: 0 };
+  }
   const results = await Promise.all(dependencies.map(({ name, version }) => query(name, version)));
   if (results.some((result) => result.status === "unknown")) {
     return { status: "unknown", detail: "OSV unreachable", scannedDependencyCount: dependencies.length };

@@ -26,22 +26,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function exactTag(record: Record<string, unknown>, kind: string, keys: string[]): boolean {
+  return record.$necromancer === kind && Object.keys(record).length === keys.length && keys.every((key) => Object.prototype.hasOwnProperty.call(record, key));
+}
+
+function reviveRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = Object.create(null);
+  for (const [key, item] of Object.entries(record)) output[key] = revive(item);
+  return output;
+}
+
 function revive(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map(revive);
   if (!isRecord(value)) return value;
   const record = value;
-  if (record.$necromancer === "undefined") return undefined;
-  if (record.$necromancer === "bigint" && typeof record.value === "string") return BigInt(record.value);
-  if (record.$necromancer === "number") {
+  if (exactTag(record, "undefined", ["$necromancer"])) return undefined;
+  if (exactTag(record, "bigint", ["$necromancer", "value"]) && typeof record.value === "string") return BigInt(record.value);
+  if (exactTag(record, "number", ["$necromancer", "value"])) {
     if (record.value === "NaN") return Number.NaN;
     if (record.value === "Infinity") return Infinity;
     if (record.value === "-Infinity") return -Infinity;
     if (record.value === "-0") return -0;
   }
-  const output: Record<string, unknown> = Object.create(null);
-  for (const [key, item] of Object.entries(record)) output[key] = revive(item);
-  return output;
+  if (exactTag(record, "object", ["$necromancer", "value"]) && isRecord(record.value)) return reviveRecord(record.value);
+  return reviveRecord(record);
 }
 
 function tagged(kind: string, details: Record<string, unknown> = {}): Record<string, unknown> {
