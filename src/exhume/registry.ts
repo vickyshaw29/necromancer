@@ -178,10 +178,6 @@ export async function downloadTarballReceipt(tarballUrl: string): Promise<Tarbal
   return { archive: Buffer.concat(chunks, total), sha512: `sha512-${sha512.digest("base64")}` };
 }
 
-export async function downloadTarball(tarballUrl: string): Promise<Buffer> {
-  return (await downloadTarballReceipt(tarballUrl)).archive;
-}
-
 function sameDigest(left: Buffer, right: Buffer): boolean {
   return left.byteLength === right.byteLength && timingSafeEqual(left, right);
 }

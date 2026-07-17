@@ -9,7 +9,7 @@ Authoritative spec: `SPEC.md`. These standards apply to every change in this rep
 - **No speculative abstraction.** No interfaces with one implementation "for flexibility", no util grab-bag files, no wrapper layers that only rename things. Three concrete uses before an abstraction earns its place.
 - **Dead code is a defect.** No unused exports, unreachable branches, or vestigial flags. Deleting is a feature.
 - **TypeScript strict, `any` is a code smell.** Every `any`/assertion needs a one-line justification in DECISIONS.md, or a proper type instead.
-- **Dependencies are a liability.** Runtime deps require strong justification (current count: 1 — commander). Prefer node built-ins.
+- **Dependencies are a liability.** Runtime deps require strong justification (current count: 3 — commander, c8, fast-check; c8 and fast-check justified in DECISIONS.md). Prefer node built-ins.
 - **Errors are product surface.** Every user-facing failure path ends in a clear, actionable message — never a raw stack trace, never a hang. Distinct exit codes per failure class.
 
 ## Performance contract

@@ -4,6 +4,8 @@
 
 ## Fast first look (no model needed)
 
+From a fresh clone, install and build first (`npm install && npm run build`), then:
+
 ```sh
 node dist/cli.js probe is-number --engine heuristic
 ```

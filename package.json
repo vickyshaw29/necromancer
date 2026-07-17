@@ -2,6 +2,7 @@
   "name": "necromancer",
   "version": "0.1.0",
   "description": "Resurrect abandoned JavaScript packages from observed behavior.",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "necromancer": "./dist/cli.js"
