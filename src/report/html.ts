@@ -1,4 +1,5 @@
 import type { ProbeBehavior } from "../probe/index.js";
+import { integritySummary, unobservedBoundary } from "./provenance.js";
 import type { ReportData } from "./types.js";
 
 function escapeHtml(value: string): string {
@@ -86,6 +87,7 @@ export function renderGraveyard(data: ReportData): string {
   const fidelity = `${data.resurrection.passed} of ${data.resurrection.total} observed behaviors, ${coverage.toFixed(2)}% branch coverage of the original`;
   const observedEvidence = `${data.resurrection.passed} of ${data.resurrection.total} observed behaviors reproduced`;
   const coverageEvidence = `${coverage.toFixed(2)}% branch coverage of the original`;
+  const boundary = unobservedBoundary(data.artifact.coverage);
   const quirk = featuredQuirk(data.soul, data.artifact.behaviors);
   const clusters = soulSection(data.soul, "Behavioral clusters", "No behavioral clusters were available.");
   const quirks = soulSection(data.soul, "Quirks", "No quirks were available.");
@@ -103,7 +105,7 @@ h1 { margin: 0; font-size: clamp(28px, 5vw, 48px); letter-spacing: .05em; overfl
 .receipt { margin-top: 14px; display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(260px, .8fr); gap: 14px; } .panel { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 18px; } .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; } .value { margin-top: 6px; font-size: 20px; overflow-wrap: anywhere; } .muted { color: var(--muted); } .after { color: var(--accent); } .warning { color: var(--warn); }
 .evidence { min-height: 164px; } .observed-card { background: linear-gradient(140deg, #1d2a2a, var(--panel)); } .reproduction-meter { height: 13px; margin-top: 28px; background: #0c0e12; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; } .reproduction-meter > span { display: block; width: ${reproductionPercentage.toFixed(2)}%; height: 100%; background: linear-gradient(90deg, var(--accent-deep), var(--accent)); }
 .coverage-card { display: grid; grid-template-columns: 84px minmax(0, 1fr); align-items: center; gap: 14px; background: linear-gradient(140deg, #242139, var(--panel)); } .coverage-gauge { width: 84px; aspect-ratio: 1; border-radius: 50%; background: conic-gradient(var(--violet) ${coveragePercentage.toFixed(2)}%, #101217 0); display: grid; place-items: center; } .coverage-gauge::after { content: ""; width: 62px; height: 62px; border-radius: 50%; background: var(--panel); border: 1px solid var(--line); }
-.boundary { grid-column: 1 / -1; border-left: 3px solid var(--warn); background: #211f19; color: #f0dfb8; padding: 12px 15px; border-radius: 0 10px 10px 0; } .receipt-meta { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; background: var(--panel-raised); }
+.boundary-card { grid-column: 1 / -1; border-left: 3px solid var(--warn); background: #211f19; color: #f0dfb8; } .receipt-meta { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; background: var(--panel-raised); } a { color: var(--accent); }
 .quarantine { margin-top: 14px; border-color: #4d5360; background: linear-gradient(135deg, #181c25, #14161c); } .quarantine strong { color: var(--accent); } .featured { margin-top: 14px; border-color: #544b80; background: linear-gradient(135deg, #211f32, var(--panel)); } .featured-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; } .featured-grid .label { font-size: 11px; } .featured-grid code { display: block; margin-top: 4px; color: #ddd8ff; overflow-wrap: anywhere; white-space: pre-wrap; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; } pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #d9dee8; } .clusters { max-height: 520px; overflow: auto; }
 @media (max-width: 680px) { main { padding: 18px 14px 42px; } .tombstone { padding: 24px 16px; } .receipt { grid-template-columns: 1fr; } .coverage-card { min-height: 140px; } .receipt-meta { display: block; } .featured-grid { grid-template-columns: 1fr; } }
@@ -128,8 +130,9 @@ h1 { margin: 0; font-size: clamp(28px, 5vw, 48px); letter-spacing: .05em; overfl
       <div class="coverage-gauge" aria-hidden="true"></div>
       <div><div class="label">Original-code evidence</div><div class="value">${escapeHtml(coverageEvidence)}</div></div>
     </article>
-    <p class="boundary">No unobserved behavior is claimed; this receipt is limited to the recorded suite.</p>
+    <article class="panel boundary-card" data-evidence="unobserved-boundary"><div class="label">Unobserved boundary</div><div class="value">${escapeHtml(boundary.uncoveredBranchStatement)}</div></article>
     <article class="panel receipt-meta"><div class="label">Rebuild engine used</div><div class="value">${escapeHtml(data.resurrection.engine)}</div></article>
+    <article class="panel receipt-meta"><div class="label">Provenance</div><div class="value"><a href="rebuilt/provenance.json">provenance.json</a> — ${escapeHtml(integritySummary(data.provenance))}</div></article>
   </section>
 
   <article class="panel quarantine">

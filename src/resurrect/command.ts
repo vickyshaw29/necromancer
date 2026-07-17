@@ -6,7 +6,7 @@ import { distillArtifact, readProbeArtifact } from "../distill/index.js";
 import { probeIntoArtifact } from "../distill/command.js";
 import { discardExhumedPackage, exhume, reportOutOfScope } from "../exhume/index.js";
 import { loadDotEnv } from "../probe/index.js";
-import { createReport, ReportResult } from "../report/index.js";
+import { createReport, integritySummary, ReportResult, unobservedBoundary } from "../report/index.js";
 import { RebuildEngineUnavailableError, selectRebuildGenerator } from "./engines.js";
 import { resurrectArtifact } from "./loop.js";
 import { RebuildEnginePreference } from "./types.js";
@@ -58,10 +58,12 @@ function printReportSummary(report: ReportResult): void {
   const rows: Array<[string, string]> = [
     ["Final generator", resurrection.engine],
     ["Observed fidelity", `${resurrection.passed} of ${resurrection.total} observed behaviors, ${artifact.coverage.branchCoverage.toFixed(2)}% branch coverage of the original`],
+    ["Unobserved boundary", unobservedBoundary(artifact.coverage).uncoveredBranchStatement],
     ["CVEs before", originalOsvSummary(report)],
     ["CVEs after", rebuiltOsvSummary(report)],
     ["Runtime dependencies", `${before.runtimeDependencies} → ${after.runtimeDependencies}`],
     ["Source LOC", `${before.loc.toLocaleString()} → ${after.loc.toLocaleString()}`],
+    ["Provenance", `${report.provenancePath} — ${integritySummary(report.data.provenance)}`],
     ["Graveyard report", report.reportPath]
   ];
   const width = Math.max(...rows.map(([label]) => label.length));
@@ -113,9 +115,14 @@ export async function runResurrectCommand(pkg: string, options: ResurrectCommand
       printPhase(3, "PROBE", `Reusing ${path.join(artifactDirectory, "behaviors.json")}`);
     }
     const artifact = await readProbeArtifact(path.join(artifactDirectory, "behaviors.json"));
+    let soulWriterEngine: string | undefined;
     if (!(await hasDistilledFiles(artifactDirectory))) {
       printPhase(4, "DISTILL", "Writing SOUL.md and deterministic characterization tests…");
-      await distillArtifact(artifact, exhumed.packagePath, artifactDirectory, { engine: options.engine, onNotice: (message) => console.error(message) });
+      const distillation = await distillArtifact(artifact, exhumed.packagePath, artifactDirectory, {
+        engine: options.engine,
+        onNotice: (message) => console.error(message)
+      });
+      soulWriterEngine = distillation.engine;
     } else {
       printPhase(4, "DISTILL", "Reusing SOUL.md and soul.test.ts.");
     }
@@ -127,8 +134,10 @@ export async function runResurrectCommand(pkg: string, options: ResurrectCommand
       version: exhumed.manifest.version,
       artifact,
       triage: exhumed.triage,
+      original: exhumed.original,
       resurrection: result,
-      artifactDirectory
+      artifactDirectory,
+      soulWriterEngine
     });
     printReportSummary(report);
     console.log(`Artifact directory: ${artifactDirectory}`);

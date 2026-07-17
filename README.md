@@ -14,7 +14,7 @@ npm run build
 node dist/cli.js resurrect left-pad
 ```
 
-That command fetches the package, creates artifacts under `.necromancer-cache/probes/`, and writes `SOUL.md`, `soul.test.ts`, `rebuilt/`, `result.json`, and `graveyard.html` beside the probe artifact. (The unrelated `necromancer` name on the npm registry belongs to another project; this tool is not published there, so run it from this repository.)
+That command fetches the package, creates artifacts under `.necromancer-cache/probes/`, and writes `SOUL.md`, `soul.test.ts`, `rebuilt/result.json`, `rebuilt/provenance.json`, and `graveyard.html` in the probe artifact. (The unrelated `necromancer` name on the npm registry belongs to another project; this tool is not published there, so run it from this repository.)
 
 ## Engines
 
@@ -98,6 +98,10 @@ RESURRECT gives a model the SOUL, test suite, public API shape, and prior failin
 ### 6. REPORT
 
 REPORT compares observed behavior counts, original coverage, LOC, runtime dependencies, and OSV advisory data. It writes an offline `graveyard.html` report with the same bounded fidelity statement used by the terminal.
+
+#### Provenance receipt
+
+`rebuilt/provenance.json` is an offline, schema-versioned measurement receipt. It records the registry tarball declaration and locally observed hash result, emitted artifact hashes, source hashes, coverage boundary, and the inputs withheld from or supplied to the rebuild engine. It reports missing or mismatched data as observed; it does not make a security or equivalence guarantee.
 
 ## Commands
 

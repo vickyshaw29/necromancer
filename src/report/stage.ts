@@ -1,10 +1,12 @@
 import { createReadStream } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { OriginalPackageReceipt } from "../exhume/index.js";
 import { renderGraveyard } from "./html.js";
 import { rebuiltMetrics } from "./metrics.js";
 import { OsvQuery, queryOsv, queryOsvDependencies } from "./osv.js";
-import { ReportData, ReportInput, ReportResult } from "./types.js";
+import { writeProvenance } from "./provenance.js";
+import { ReportData, ReportEvidence, ReportInput, ReportResult } from "./types.js";
 
 const MAX_SOUL_CHARS = 96_000;
 
@@ -26,6 +28,20 @@ export interface ReportOptions {
   osvQuery?: OsvQuery;
 }
 
+function unavailableOriginal(input: ReportInput): OriginalPackageReceipt {
+  return {
+    name: input.packageName,
+    version: input.version,
+    registryTarballUrl: "unknown",
+    registryDeclaredIntegrity: { integrity: "unknown", shasum: "unknown" },
+    localTarballSha512: "unknown",
+    integrityMatch: "unknown",
+    detectedLicense: "unknown",
+    sourceLoc: input.triage.loc,
+    resolvedRuntimeDependencyCount: input.triage.runtimeDependencyCount
+  };
+}
+
 export async function createReport(input: ReportInput, options: ReportOptions = {}): Promise<ReportResult> {
   const rebuiltDirectory = path.join(input.artifactDirectory, "rebuilt");
   const query = options.osvQuery ?? queryOsv;
@@ -35,7 +51,7 @@ export async function createReport(input: ReportInput, options: ReportOptions = 
     query(input.packageName, input.version)
   ]);
   const rebuiltOsv = await queryOsvDependencies(after.declaredRuntimeDependencies, query);
-  const data: ReportData = {
+  const evidence: ReportEvidence = {
     packageName: input.packageName,
     version: input.version,
     artifact: input.artifact,
@@ -47,7 +63,14 @@ export async function createReport(input: ReportInput, options: ReportOptions = 
     soul
   };
   await mkdir(input.artifactDirectory, { recursive: true });
+  const { provenance, provenancePath } = await writeProvenance(
+    evidence,
+    input.original ?? unavailableOriginal(input),
+    input.artifactDirectory,
+    input.soulWriterEngine
+  );
+  const data: ReportData = { ...evidence, provenance };
   const reportPath = path.join(input.artifactDirectory, "graveyard.html");
   await writeFile(reportPath, renderGraveyard(data), "utf8");
-  return { reportPath, data };
+  return { reportPath, provenancePath, data };
 }

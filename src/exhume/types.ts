@@ -28,12 +28,32 @@ export interface PackageSpec {
 export interface NpmPackageManifest {
   name: string;
   version: string;
+  license?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
   gypfile?: boolean;
   dist?: {
     tarball?: string;
+    integrity?: string;
+    shasum?: string;
   };
+}
+
+export type RegistryIntegrityMatch = "verified" | "mismatch" | "unknown";
+
+export interface OriginalPackageReceipt {
+  name: string;
+  version: string;
+  registryTarballUrl: string;
+  registryDeclaredIntegrity: {
+    integrity: string | "unknown";
+    shasum: string | "unknown";
+  };
+  localTarballSha512: string;
+  integrityMatch: RegistryIntegrityMatch;
+  detectedLicense: string;
+  sourceLoc: number;
+  resolvedRuntimeDependencyCount: number;
 }
 
 export interface ExhumedPackage {
@@ -42,4 +62,5 @@ export interface ExhumedPackage {
   workspacePath: string;
   packagePath: string;
   triage: TriageResult;
+  original: OriginalPackageReceipt;
 }

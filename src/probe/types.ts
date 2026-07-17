@@ -55,6 +55,8 @@ export interface ProbeBehavior {
 
 export interface CoverageSummary {
   branchCoverage: number;
+  branchTotal?: number;
+  branchCovered?: number;
   lineCoverage: number;
   functionCoverage: number;
   statementCoverage: number;

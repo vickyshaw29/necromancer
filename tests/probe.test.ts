@@ -85,6 +85,8 @@ describe("PROBE", () => {
     );
     expect(result.coverage.available).toBe(true);
     expect(result.coverage.branchCoverage).toBeGreaterThan(0);
+    expect(result.coverage.branchTotal).toBeGreaterThan(0);
+    expect(result.coverage.branchCovered).toBeGreaterThan(0);
 
     const artifact = JSON.parse(await readFile(path.join(artifactDirectory, "behaviors.json"), "utf8")) as { behaviors: unknown[] };
     expect(artifact.behaviors).toHaveLength(16);

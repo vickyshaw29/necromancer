@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { downloadTarball, fetchPackageManifest, parsePackageSpec } from "./registry.js";
+import { downloadTarballReceipt, fetchPackageManifest, parsePackageSpec, registryIntegrityMatch } from "./registry.js";
 import { unpackNpmTarball } from "./tar.js";
 import { triagePackage } from "./triage.js";
 import { ExhumedPackage, NpmPackageManifest, PackageSpec } from "./types.js";
@@ -53,18 +53,39 @@ async function countRuntimeDependencies(root: NpmPackageManifest): Promise<Depen
 export async function exhume(input: string): Promise<ExhumedPackage> {
   const spec: PackageSpec = parsePackageSpec(input);
   const registryManifest = await fetchPackageManifest(spec);
-  const archive = await downloadTarball(registryManifest.dist?.tarball as string);
+  const tarballUrl = registryManifest.dist?.tarball as string;
+  const download = await downloadTarballReceipt(tarballUrl);
   const workspacePath = await mkdtemp(path.join(os.tmpdir(), "necromancer-"));
   const packagePath = path.join(workspacePath, "package");
 
   try {
-    await unpackNpmTarball(archive, packagePath);
+    await unpackNpmTarball(download.archive, packagePath);
     const manifest = JSON.parse(await readFile(path.join(packagePath, "package.json"), "utf8")) as NpmPackageManifest;
     const dependencyResult = await countRuntimeDependencies(manifest);
     const triage = await triagePackage(packagePath, {
       runtimeDependencyCount: dependencyResult.count
     });
-    return { spec, manifest, workspacePath, packagePath, triage };
+    return {
+      spec,
+      manifest,
+      workspacePath,
+      packagePath,
+      triage,
+      original: {
+        name: registryManifest.name,
+        version: registryManifest.version,
+        registryTarballUrl: tarballUrl,
+        registryDeclaredIntegrity: {
+          integrity: registryManifest.dist?.integrity ?? "unknown",
+          shasum: registryManifest.dist?.shasum ?? "unknown"
+        },
+        localTarballSha512: download.sha512,
+        integrityMatch: registryIntegrityMatch(download.archive, registryManifest.dist),
+        detectedLicense: typeof manifest.license === "string" && manifest.license.trim() ? manifest.license : "unknown",
+        sourceLoc: triage.loc,
+        resolvedRuntimeDependencyCount: triage.runtimeDependencyCount
+      }
+    };
   } catch (error) {
     await rm(workspacePath, { recursive: true, force: true });
     throw error;
