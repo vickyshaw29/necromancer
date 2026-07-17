@@ -36,7 +36,7 @@ OPENAI_API_KEY=your-key-here
 
 ## Demo corpses
 
-- `deep-extend` is an in-scope package with a published, later-fixed security advisory. It is useful for demonstrating the scanner: OSV queries the selected original package version, while a zero-runtime-dependency reconstruction is scanned separately and reports no advisories across 0 runtime dependencies.
+- `deep-extend@0.5.0` is an in-scope version with a published, later-fixed security advisory (fixed in 0.5.1). It is useful for demonstrating the scanner: OSV queries the selected original package version and the report lists the identifiers it returns, while a zero-runtime-dependency reconstruction is scanned separately and reports the measured result. Resurrecting bare `deep-extend` resolves to the latest (fixed) version, whose scan comes back without advisories — select `@0.5.0` explicitly to demonstrate the advisory side.
 - `left-pad` is a small no-advisory comparison target. Its report demonstrates that “no advisories found” is shown only when the scan measures that result.
 
 Advisory counts are queried at report time; this tool does not hardcode a before/after advisory outcome.

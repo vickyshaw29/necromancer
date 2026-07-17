@@ -51,18 +51,19 @@ function promptFor(request: RebuildRequest): string {
 
 export function codexRebuildConfiguration(
   environment: NodeJS.ProcessEnv = process.env,
-  onNotice: (message: string) => void = (message) => console.error(`[RESURRECT] ${message}`)
+  onNotice: (message: string) => void = (message) => console.error(`[RESURRECT] ${message}`),
+  defaultTimeoutMs: number = DEFAULT_CODEX_REBUILD_TIMEOUT_MS
 ): CodexRebuildConfiguration {
   const configured = environment.NECROMANCER_CODEX_TIMEOUT_MS;
-  if (configured === undefined) return { timeoutMs: DEFAULT_CODEX_REBUILD_TIMEOUT_MS };
+  if (configured === undefined) return { timeoutMs: defaultTimeoutMs };
   if (!/^[1-9]\d*$/.test(configured)) {
-    onNotice(`NECROMANCER_CODEX_TIMEOUT_MS must be a positive integer; using ${DEFAULT_CODEX_REBUILD_TIMEOUT_MS} ms.`);
-    return { timeoutMs: DEFAULT_CODEX_REBUILD_TIMEOUT_MS };
+    onNotice(`NECROMANCER_CODEX_TIMEOUT_MS must be a positive integer; using ${defaultTimeoutMs} ms.`);
+    return { timeoutMs: defaultTimeoutMs };
   }
   const timeoutMs = Number(configured);
   if (!Number.isSafeInteger(timeoutMs)) {
-    onNotice(`NECROMANCER_CODEX_TIMEOUT_MS must be a positive integer; using ${DEFAULT_CODEX_REBUILD_TIMEOUT_MS} ms.`);
-    return { timeoutMs: DEFAULT_CODEX_REBUILD_TIMEOUT_MS };
+    onNotice(`NECROMANCER_CODEX_TIMEOUT_MS must be a positive integer; using ${defaultTimeoutMs} ms.`);
+    return { timeoutMs: defaultTimeoutMs };
   }
   return { timeoutMs };
 }

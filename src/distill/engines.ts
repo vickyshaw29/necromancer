@@ -6,8 +6,10 @@ import { runCheckedProcess } from "../process.js";
 import { codexAvailable } from "../probe/index.js";
 import { renderHeuristicSoul } from "./soul.js";
 import { DistillEnginePreference, SoulEngine, SoulRequest } from "./types.js";
+import { codexRebuildConfiguration } from "../resurrect/engines.js";
 
 const MAX_EVIDENCE_CHARS = 48_000;
+export const DEFAULT_CODEX_SOUL_TIMEOUT_MS = 300_000;
 
 const SOUL_SCHEMA = {
   type: "object",
@@ -89,7 +91,14 @@ export function createApiSoulEngine(apiKey: string, request: typeof fetch = fetc
   };
 }
 
-export function createCodexSoulEngine(): SoulEngine {
+export function codexSoulConfiguration(
+  environment: NodeJS.ProcessEnv = process.env,
+  onNotice: (message: string) => void = (message) => console.error(`[DISTILL] ${message}`)
+): { timeoutMs: number } {
+  return codexRebuildConfiguration(environment, onNotice, DEFAULT_CODEX_SOUL_TIMEOUT_MS);
+}
+
+export function createCodexSoulEngine(configuration: { timeoutMs: number } = codexSoulConfiguration()): SoulEngine {
   return {
     name: "codex",
     async generate(request): Promise<string> {
@@ -116,7 +125,7 @@ export function createCodexSoulEngine(): SoulEngine {
             outputPath,
             promptFor(request)
           ],
-          { cwd: process.cwd(), timeoutMs: 90_000, maxOutputChars: 500 }
+          { cwd: process.cwd(), timeoutMs: configuration.timeoutMs, maxOutputChars: 500 }
         );
         return validateSoul(JSON.parse(await readFile(outputPath, "utf8")), request);
       } finally {

@@ -3,7 +3,14 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { createApiSoulEngine, distillArtifact, renderHeuristicSoul, renderSoulTest } from "../src/distill/index.js";
+import {
+  codexSoulConfiguration,
+  createApiSoulEngine,
+  DEFAULT_CODEX_SOUL_TIMEOUT_MS,
+  distillArtifact,
+  renderHeuristicSoul,
+  renderSoulTest
+} from "../src/distill/index.js";
 import type { ProbeArtifact, SoulRequest } from "../src/distill/index.js";
 import { toArtifactValue } from "../src/probe/candidates.js";
 import type { JsonSafeValue } from "../src/sandbox/index.js";
@@ -126,5 +133,10 @@ describe("DISTILL", () => {
     );
 
     await expect(engine.generate(request)).resolves.toContain("## Quirks");
+  });
+
+  it("uses the Codex timeout environment override in its prose configuration", () => {
+    expect(codexSoulConfiguration({ NECROMANCER_CODEX_TIMEOUT_MS: "345678" })).toEqual({ timeoutMs: 345678 });
+    expect(codexSoulConfiguration({})).toEqual({ timeoutMs: DEFAULT_CODEX_SOUL_TIMEOUT_MS });
   });
 });
