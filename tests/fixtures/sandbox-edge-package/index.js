@@ -12,3 +12,5 @@ module.exports = function edgeValue(kind) {
   if (kind === "throw") throw new RangeError("edge failure");
   return { kind };
 };
+
+module.exports.edge = module.exports;

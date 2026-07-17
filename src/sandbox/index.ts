@@ -1,9 +1,11 @@
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { parseSurface, serializeRequest } from "./protocol.js";
 import { RUNNER_SOURCE } from "./runner-source.js";
 import {
   InvocationResult,
+  ModuleSurface,
   RunnerMode,
   SandboxOptions,
   SandboxRunner,
@@ -61,7 +63,7 @@ function installationEnvironment(root: string): NodeJS.ProcessEnv {
   };
 }
 
-function childEnvironment(root: string): NodeJS.ProcessEnv {
+function childEnvironment(root: string, coverageDirectory?: string): NodeJS.ProcessEnv {
   return {
     ...installationEnvironment(root),
     NODE_ENV: "production",
@@ -73,7 +75,8 @@ function childEnvironment(root: string): NodeJS.ProcessEnv {
     ALL_PROXY: "",
     http_proxy: "",
     https_proxy: "",
-    all_proxy: ""
+    all_proxy: "",
+    ...(coverageDirectory ? { NODE_V8_COVERAGE: coverageDirectory } : {})
   };
 }
 
@@ -263,14 +266,6 @@ async function installWithDocker(root: string, env: NodeJS.ProcessEnv): Promise<
   );
 }
 
-function serializeRequest(source: SandboxSource, exportPath: string, args: unknown[]): string {
-  try {
-    return JSON.stringify({ packageName: source.packageName, exportPath, args });
-  } catch {
-    throw new SandboxProcessError("Sandbox invocation arguments must be JSON-serializable and cannot contain circular references or BigInt values.");
-  }
-}
-
 class Runner implements SandboxRunner {
   readonly mode: RunnerMode;
   private disposed = false;
@@ -280,14 +275,21 @@ class Runner implements SandboxRunner {
     private readonly root: string,
     private readonly source: SandboxSource,
     private readonly timeoutMs: number,
-    private readonly dockerEnv?: NodeJS.ProcessEnv
+    private readonly dockerEnv?: NodeJS.ProcessEnv,
+    private readonly coverageDirectory?: string
   ) {
     this.mode = mode;
   }
 
-  async invoke(exportPath: string, args: unknown[]): Promise<InvocationResult> {
+  private async request(exportPath: string, args: unknown[], operation: "invoke" | "inspect"): Promise<InvocationResult> {
     if (this.disposed) throw new SandboxProcessError("This sandbox has already been disposed.");
-    const input = serializeRequest(this.source, exportPath, args);
+    let input: string;
+    try {
+      input = serializeRequest(this.source, exportPath, args, operation);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "arguments could not be encoded safely";
+      throw new SandboxProcessError(detail);
+    }
     const result =
       this.mode === "docker"
         ? await runCommand(
@@ -313,11 +315,31 @@ class Runner implements SandboxRunner {
           )
         : await runCommand(process.execPath, ["runner.cjs"], {
             cwd: this.root,
-            env: childEnvironment(this.root),
+            env: childEnvironment(this.root, this.coverageDirectory),
             input,
             timeoutMs: this.timeoutMs
           });
     return parseRpcResponse(result.stdout);
+  }
+
+  async inspect(): Promise<ModuleSurface> {
+    const result = await this.request(".", [], "inspect");
+    if (!result.ok) throw new SandboxProcessError(`Could not inspect exports: ${result.error.name}: ${result.error.message}`);
+    try {
+      return parseSurface(result.value);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "invalid surface";
+      throw new SandboxProcessError(detail);
+    }
+  }
+
+  async invoke(exportPath: string, args: unknown[]): Promise<InvocationResult> {
+    return this.request(exportPath, args, "invoke");
+  }
+
+  coveragePaths(): { rawDirectory: string; sourceDirectory: string } | undefined {
+    if (!this.coverageDirectory) return undefined;
+    return { rawDirectory: this.coverageDirectory, sourceDirectory: path.join(this.root, "package") };
   }
 
   async dispose(): Promise<void> {
@@ -339,7 +361,11 @@ export async function createSandboxRunner(source: SandboxSource, options: Sandbo
   let dockerEnv: NodeJS.ProcessEnv | undefined;
 
   try {
-    if (!options.noDocker && (await dockerAvailable())) {
+    if (options.coverageDirectory) {
+      await mkdir(options.coverageDirectory, { recursive: true });
+      warn("[SANDBOX] PROBE coverage uses reduced-isolation child-process instrumentation so c8 can collect original branch coverage.");
+      await installWithChild(root);
+    } else if (!options.noDocker && (await dockerAvailable())) {
       try {
         dockerEnv = await dockerEnvironment(root);
         await installWithDocker(root, dockerEnv);
@@ -356,7 +382,7 @@ export async function createSandboxRunner(source: SandboxSource, options: Sandbo
       );
       await installWithChild(root);
     }
-    return new Runner(mode, root, source, timeoutMs, dockerEnv);
+    return new Runner(mode, root, source, timeoutMs, dockerEnv, options.coverageDirectory);
   } catch (error) {
     await rm(root, { recursive: true, force: true });
     throw error;

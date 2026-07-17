@@ -32,17 +32,31 @@ export interface SandboxSource {
   packageName: string;
 }
 
+export interface ExportDescriptor {
+  path: string;
+  type: string;
+  arity?: number;
+}
+
+export interface ModuleSurface {
+  exports: ExportDescriptor[];
+}
+
 export interface SandboxOptions {
   /** Prefer the child-process runner even when Docker is available. */
   noDocker?: boolean;
   /** Per-invocation wall-clock cap. */
   timeoutMs?: number;
+  /** Enables V8 raw coverage output and selects the child runner for this sandbox. */
+  coverageDirectory?: string;
   /** Receives explicit fallback warnings; defaults to stderr. */
   onWarning?: (message: string) => void;
 }
 
 export interface SandboxRunner {
   readonly mode: RunnerMode;
+  inspect(): Promise<ModuleSurface>;
   invoke(exportPath: string, args: unknown[]): Promise<InvocationResult>;
+  coveragePaths(): { rawDirectory: string; sourceDirectory: string } | undefined;
   dispose(): Promise<void>;
 }

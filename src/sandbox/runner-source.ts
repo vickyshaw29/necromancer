@@ -13,6 +13,26 @@ function tagged(kind, details) {
   return { [TAG]: kind, ...details };
 }
 
+function decodeWire(value) {
+  if (value === null || typeof value !== "object") return value;
+  const kind = value.$necromancerInput;
+  if (kind === "undefined") return undefined;
+  if (kind === "bigint") return BigInt(value.value);
+  if (kind === "number") {
+    if (value.value === "NaN") return NaN;
+    if (value.value === "Infinity") return Infinity;
+    if (value.value === "-Infinity") return -Infinity;
+    if (value.value === "-0") return -0;
+  }
+  if (kind === "array") return value.value.map(decodeWire);
+  if (kind === "object") {
+    const output = Object.create(null);
+    for (const [key, item] of Object.entries(value.value)) output[key] = decodeWire(item);
+    return output;
+  }
+  return value;
+}
+
 function jsonSafe(value, valuePath = "$", ancestors = new Map(), depth = 0) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "undefined") return tagged("undefined", {});
@@ -165,6 +185,26 @@ function resolveExport(moduleValue, exportPath, packageName) {
   return current;
 }
 
+function describeExport(path, value) {
+  const descriptor = { path, type: typeof value };
+  if (typeof value === "function") descriptor.arity = value.length;
+  return descriptor;
+}
+
+function inspectModule(moduleValue, packageName) {
+  const exports = [describeExport(packageName, moduleValue)];
+  if (moduleValue && (typeof moduleValue === "object" || typeof moduleValue === "function")) {
+    for (const key of Object.keys(moduleValue).sort()) {
+      try {
+        exports.push(describeExport(packageName + "." + key, moduleValue[key]));
+      } catch (error) {
+        exports.push({ path: packageName + "." + key, type: "unreadable" });
+      }
+    }
+  }
+  return { exports };
+}
+
 async function readRequest() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
@@ -178,11 +218,16 @@ async function main() {
   let response;
   try {
     const moduleValue = await loadModule(request.packageName);
+    if (request.operation === "inspect") {
+      response = { ok: true, value: inspectModule(moduleValue, request.packageName), durationMs: Number(process.hrtime.bigint() - start) / 1e6 };
+      process.stdout.write(RPC_PREFIX + JSON.stringify(response) + "\n");
+      return;
+    }
     const target = resolveExport(moduleValue, request.exportPath, request.packageName);
     if (typeof target !== "function") {
       throw new TypeError("Requested export " + JSON.stringify(request.exportPath) + " is not a function.");
     }
-    const value = await target(...request.args);
+    const value = await target(...decodeWire(request.args));
     response = { ok: true, value: jsonSafe(value), durationMs: Number(process.hrtime.bigint() - start) / 1e6 };
   } catch (error) {
     response = { ok: false, error: serializeError(error), durationMs: Number(process.hrtime.bigint() - start) / 1e6 };
