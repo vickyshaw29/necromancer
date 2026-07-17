@@ -8,7 +8,7 @@ import { discardExhumedPackage, exhume, reportOutOfScope, TriageResult } from ".
 import { loadDotEnv, probePackage, ProbeEnginePreference } from "./probe/index.js";
 import { resurrectEngine, runResurrectCommand } from "./resurrect/command.js";
 import { createSandboxRunner, SandboxRunner } from "./sandbox/index.js";
-import { printBanner, printPhase } from "./terminal.js";
+import { printBanner, printPhase, printReproducibilityHandoff } from "./terminal.js";
 
 function marker(value: boolean): string {
   return value ? "detected" : "none";
@@ -89,6 +89,8 @@ async function runProbeCommand(
     }
     console.log(`Input planner: ${result.engine}`);
     console.log(`Artifacts: ${result.artifactPath}`);
+    console.log(`Artifact directory: ${artifactDirectory}`);
+    printReproducibilityHandoff(artifactDirectory, false, false);
     printPhase(4, "DISTILL", "Available: necromancer distill <pkg>");
     printPhase(5, "RESURRECT", "Available: necromancer resurrect <pkg>");
     printPhase(6, "REPORT", "Available after resurrection.");

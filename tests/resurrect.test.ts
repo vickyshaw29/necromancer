@@ -1,11 +1,14 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHeuristicSoul, renderSoulTest } from "../src/distill/index.js";
 import { writeDistillWorkspace } from "../src/distill/stage.js";
-import { createApiRebuildGenerator, resurrectArtifact } from "../src/resurrect/index.js";
+import { codexAvailable } from "../src/probe/index.js";
+import { createApiRebuildGenerator, createAutoRebuildGenerator, resurrectArtifact, selectRebuildGenerator } from "../src/resurrect/index.js";
 import type { ProbeArtifact } from "../src/distill/index.js";
-import type { RebuildGenerator, RebuildRequest } from "../src/resurrect/index.js";
+import type { RebuildGenerator, RebuildRequest, ResurrectionEvent } from "../src/resurrect/index.js";
+
+vi.mock("../src/probe/index.js", () => ({ codexAvailable: vi.fn() }));
 
 const temporaryPaths: string[] = [];
 
@@ -21,9 +24,13 @@ const artifact: ProbeArtifact = {
 
 const wrongSource = 'export default function resurrectFixture(_value: unknown): string { return "wrong"; }';
 const correctSource = 'export default function resurrectFixture(value: unknown): string { return value === true ? "yes" : "no"; }';
+const originalApiKey = process.env.OPENAI_API_KEY;
 
 afterEach(async () => {
   await Promise.all(temporaryPaths.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  vi.mocked(codexAvailable).mockReset();
+  if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = originalApiKey;
 });
 
 async function resurrectionWorkspace(): Promise<string> {
@@ -78,6 +85,58 @@ describe("RESURRECT", () => {
       expect.arrayContaining([expect.objectContaining({ id: "behavior-0001", expected: "yes" }), expect.objectContaining({ id: "behavior-0002", expected: "no" })])
     );
     await expect(readFile(result.resultPath, "utf8")).resolves.toMatch(/"rounds"[\s\S]*"passed": 2[\s\S]*"complete": true/);
+  });
+
+  it("emits a live ledger for each resurrection round", async () => {
+    const directory = await resurrectionWorkspace();
+    const events: ResurrectionEvent[] = [];
+
+    await resurrectArtifact({ artifact, artifactDirectory: directory }, generator([correctSource], []), { onEvent: (event) => events.push(event) });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "engine-selected",
+      "round-start",
+      "generation-complete",
+      "build-start",
+      "test-start",
+      "round-complete"
+    ]);
+    expect(events).toContainEqual({ type: "engine-selected", engine: "stub" });
+    expect(events).toContainEqual({ type: "round-start", round: 1, maxRounds: 6 });
+    expect(events).toContainEqual({ type: "generation-complete", round: 1, engine: "stub" });
+    expect(events).toContainEqual({ type: "round-complete", round: 1, passed: 2, total: 2, result: "2 of 2 observed behaviors passing" });
+  });
+
+  it("selects Codex before the API and falls back to the API after a Codex failure", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    vi.mocked(codexAvailable).mockResolvedValue(true);
+
+    const selected = await selectRebuildGenerator("auto");
+    expect(selected.name).toBe("codex");
+
+    const generated: string[] = [];
+    const automatic = createAutoRebuildGenerator(
+      {
+        name: "codex",
+        async generate(): Promise<string> {
+          generated.push("codex");
+          throw new Error("Codex failed.");
+        }
+      },
+      {
+        name: "api",
+        async generate(): Promise<string> {
+          generated.push("api");
+          return correctSource;
+        }
+      }
+    );
+
+    await expect(
+      automatic.generate({ packageName: artifact.packageName, api: artifact.surface?.exports ?? [], soul: "fixture soul", soulTest: "fixture test", round: 1, failures: [] })
+    ).resolves.toBe(correctSource);
+    expect(generated).toEqual(["codex", "api"]);
+    expect(automatic.name).toBe("api");
   });
 
   it("caps an incomplete reconstruction at six rounds", async () => {

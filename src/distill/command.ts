@@ -3,7 +3,7 @@ import { createProbeArtifactDirectory, findLatestProbeArtifact } from "../artifa
 import { discardExhumedPackage, exhume, reportOutOfScope } from "../exhume/index.js";
 import { loadDotEnv, probePackage, ProbeEnginePreference } from "../probe/index.js";
 import { createSandboxRunner, SandboxRunner } from "../sandbox/index.js";
-import { printBanner, printPhase } from "../terminal.js";
+import { printBanner, printPhase, printReproducibilityHandoff } from "../terminal.js";
 import { readProbeArtifact } from "./artifact.js";
 import { distillArtifact } from "./index.js";
 import { DistillEnginePreference } from "./types.js";
@@ -79,6 +79,8 @@ export async function runDistillCommand(pkg: string, options: DistillCommandOpti
     });
     console.log(`DISTILL writer: ${result.engine}`);
     console.log(`Artifacts: ${result.soulPath}, ${result.testPath}`);
+    console.log(`Artifact directory: ${artifactDirectory}`);
+    printReproducibilityHandoff(artifactDirectory, true, false);
     printPhase(5, "RESURRECT", "Available: necromancer resurrect <pkg>");
     printPhase(6, "REPORT", "Available after resurrection.");
   } finally {

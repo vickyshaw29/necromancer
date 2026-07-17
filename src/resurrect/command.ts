@@ -10,7 +10,7 @@ import { createReport, ReportResult } from "../report/index.js";
 import { RebuildEngineUnavailableError, selectRebuildGenerator } from "./engines.js";
 import { resurrectArtifact } from "./loop.js";
 import { RebuildEnginePreference } from "./types.js";
-import { printBanner, printPhase, printSuccess } from "../terminal.js";
+import { printBanner, printPhase, printReproducibilityHandoff, printResurrectionEngineSetup, printResurrectionEvent, printSuccess } from "../terminal.js";
 
 async function readable(filePath: string): Promise<boolean> {
   try {
@@ -43,6 +43,7 @@ function rebuiltOsvSummary(report: ReportResult): string {
 function printReportSummary(report: ReportResult): void {
   const { artifact, resurrection, before, after } = report.data;
   const rows: Array<[string, string]> = [
+    ["Final generator", resurrection.engine],
     ["Observed fidelity", `${resurrection.passed} of ${resurrection.total} observed behaviors, ${artifact.coverage.branchCoverage.toFixed(2)}% branch coverage of the original`],
     ["CVEs before", osvSummary(report.data.originalOsv)],
     ["CVEs after", rebuiltOsvSummary(report)],
@@ -69,6 +70,18 @@ export function resurrectEngine(value: string): RebuildEnginePreference {
 export async function runResurrectCommand(pkg: string, options: ResurrectCommandOptions): Promise<void> {
   await loadDotEnv();
   printBanner();
+  let generator;
+  try {
+    generator = await selectRebuildGenerator(options.engine);
+  } catch (error) {
+    if (error instanceof RebuildEngineUnavailableError) {
+      console.error(`[RESURRECT] ${error.message}`);
+      printResurrectionEngineSetup();
+      process.exitCode = 4;
+      return;
+    }
+    throw error;
+  }
   printPhase(1, "EXHUME", "Fetching npm tarball and performing static triage…");
   const exhumed = await exhume(pkg);
   try {
@@ -77,18 +90,6 @@ export async function runResurrectCommand(pkg: string, options: ResurrectCommand
     if (exhumed.triage.verdict === "OUT_OF_SCOPE") {
       reportOutOfScope(exhumed.triage.reasons);
       return;
-    }
-
-    let generator;
-    try {
-      generator = await selectRebuildGenerator(options.engine);
-    } catch (error) {
-      if (error instanceof RebuildEngineUnavailableError) {
-        console.error(`[RESURRECT] ${error.message}`);
-        process.exitCode = 4;
-        return;
-      }
-      throw error;
     }
 
     let artifactDirectory = await findLatestProbeArtifact(exhumed.manifest.name, exhumed.manifest.version);
@@ -106,7 +107,7 @@ export async function runResurrectCommand(pkg: string, options: ResurrectCommand
       printPhase(4, "DISTILL", "Reusing SOUL.md and soul.test.ts.");
     }
     printPhase(5, "RESURRECT", "Rebuilding from observed behavior…");
-    const result = await resurrectArtifact({ artifact, artifactDirectory }, generator);
+    const result = await resurrectArtifact({ artifact, artifactDirectory }, generator, { onEvent: printResurrectionEvent });
     printPhase(6, "REPORT", "Collecting compatibility, dependency, and advisory evidence…");
     const report = await createReport({
       packageName: exhumed.manifest.name,
@@ -117,6 +118,8 @@ export async function runResurrectCommand(pkg: string, options: ResurrectCommand
       artifactDirectory
     });
     printReportSummary(report);
+    console.log(`Artifact directory: ${artifactDirectory}`);
+    printReproducibilityHandoff(artifactDirectory, true, true);
     printSuccess(result.complete ? "Reconstruction report written." : "Reconstruction report written; some observed behaviors still differ.");
     if (!result.complete) process.exitCode = 3;
   } finally {

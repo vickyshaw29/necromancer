@@ -108,7 +108,7 @@ export function createCodexRebuildGenerator(): RebuildGenerator {
   };
 }
 
-function createAutoRebuildGenerator(primary: RebuildGenerator, fallback: RebuildGenerator | undefined): RebuildGenerator {
+export function createAutoRebuildGenerator(primary: RebuildGenerator, fallback: RebuildGenerator | undefined): RebuildGenerator {
   let active = primary;
   return {
     get name(): string {
@@ -137,7 +137,7 @@ export async function selectRebuildGenerator(preference: RebuildEnginePreference
     return createCodexRebuildGenerator();
   }
   const codex = (await codexAvailable()) ? createCodexRebuildGenerator() : undefined;
-  if (apiKey) return createAutoRebuildGenerator(createApiRebuildGenerator(apiKey), codex);
-  if (codex) return codex;
+  if (codex) return createAutoRebuildGenerator(codex, apiKey ? createApiRebuildGenerator(apiKey) : undefined);
+  if (apiKey) return createApiRebuildGenerator(apiKey);
   throw new RebuildEngineUnavailableError("No OpenAI API key or Codex CLI is available. Resurrection requires a model engine; use --engine api with OPENAI_API_KEY or configure Codex CLI.");
 }

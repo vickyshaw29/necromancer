@@ -51,6 +51,16 @@ export interface ResurrectionRound {
   failedIds: string[];
 }
 
+export type ResurrectionEvent =
+  | { type: "engine-selected"; engine: string }
+  | { type: "round-start"; round: number; maxRounds: number }
+  | { type: "generation-complete"; round: number; engine: string }
+  | { type: "build-start"; round: number }
+  | { type: "test-start"; round: number }
+  | { type: "round-complete"; round: number; passed: number; total: number; result: string };
+
+export type ResurrectionEventCallback = (event: ResurrectionEvent) => void;
+
 export interface ResurrectionResult {
   packageName: string;
   engine: string;

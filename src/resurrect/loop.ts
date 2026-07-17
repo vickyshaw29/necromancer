@@ -9,6 +9,7 @@ import {
   FailureFeedback,
   PublicApiMember,
   RebuildGenerator,
+  ResurrectionEventCallback,
   ResurrectionResult,
   ResurrectionRound,
   ResurrectionTarget
@@ -69,11 +70,19 @@ function failedRun(total: number, detail: string): CharacterizationResult {
   return { passed: 0, total, failures: [{ id: "", detail }] };
 }
 
-async function executeCandidate(artifactDirectory: string, source: string, total: number): Promise<CharacterizationResult> {
+async function executeCandidate(
+  artifactDirectory: string,
+  source: string,
+  total: number,
+  round: number,
+  onEvent: ResurrectionEventCallback
+): Promise<CharacterizationResult> {
   const rebuiltDirectory = path.join(artifactDirectory, "rebuilt");
   try {
+    onEvent({ type: "build-start", round });
     await writeCandidateProject(rebuiltDirectory, source);
     await buildCandidate(rebuiltDirectory);
+    onEvent({ type: "test-start", round });
     return await runCharacterization(artifactDirectory);
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Candidate build failed.";
@@ -82,7 +91,8 @@ async function executeCandidate(artifactDirectory: string, source: string, total
 }
 
 export interface ResurrectionLoopOptions {
-  evaluateCandidate?: (artifactDirectory: string, source: string, total: number) => Promise<CharacterizationResult>;
+  evaluateCandidate?: (artifactDirectory: string, source: string, total: number, round: number, onEvent: ResurrectionEventCallback) => Promise<CharacterizationResult>;
+  onEvent?: ResurrectionEventCallback;
 }
 
 export async function resurrectArtifact(
@@ -101,8 +111,12 @@ export async function resurrectArtifact(
   let feedback: FailureFeedback[] = [];
   let last: CharacterizationResult = { passed: 0, total, failures: [] };
   const evaluate = options.evaluateCandidate ?? executeCandidate;
+  const emit: ResurrectionEventCallback = (event) => options.onEvent?.(event);
+  let selectedEngine = generator.name;
+  emit({ type: "engine-selected", engine: selectedEngine });
 
   for (let round = 1; round <= MAX_ROUNDS; round += 1) {
+    emit({ type: "round-start", round, maxRounds: MAX_ROUNDS });
     const source = await generator.generate({
       packageName: target.artifact.packageName,
       api: publicApi(target),
@@ -113,11 +127,17 @@ export async function resurrectArtifact(
       failures: feedback
     });
     previousSource = source;
-    last = await evaluate(target.artifactDirectory, source, total);
+    if (generator.name !== selectedEngine) {
+      selectedEngine = generator.name;
+      emit({ type: "engine-selected", engine: selectedEngine });
+    }
+    emit({ type: "generation-complete", round, engine: generator.name });
+    last = await evaluate(target.artifactDirectory, source, total, round, emit);
     if (last.total !== total) {
       throw new Error(`The emitted suite reported ${last.total} tests, but behaviors.json records ${total} observed behaviors.`);
     }
     rounds.push({ round, passed: last.passed, total, failedIds: last.failures.map((failure) => failure.id).filter(Boolean) });
+    emit({ type: "round-complete", round, passed: last.passed, total, result: `${last.passed} of ${total} observed behaviors passing` });
     if (last.passed === total) break;
     feedback = failureFeedback(target.artifact.behaviors, last);
   }

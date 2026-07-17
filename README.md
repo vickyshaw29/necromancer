@@ -24,7 +24,7 @@ node dist/cli.js resurrect is-odd --engine codex
 
 PROBE and DISTILL use `api → codex → heuristic` automatically: the OpenAI API is selected when `OPENAI_API_KEY` is present, then Codex CLI when available, then the deterministic heuristic planner/writer. Override with `--engine api`, `--engine codex`, or `--engine heuristic` where supported.
 
-RESURRECT requires a model engine because emitting a meaningful implementation is not a heuristic operation. It auto-selects API then Codex, or accepts `--engine api` / `--engine codex`; if neither is available, it exits with a clear message and does not fabricate a rebuild.
+RESURRECT requires a model engine because emitting a meaningful implementation is not a heuristic operation. It auto-selects Codex CLI then the OpenAI API, or accepts `--engine api` / `--engine codex`; if neither is available, it exits before EXHUME with a clear setup message and does not fabricate a rebuild. In automatic mode, a Codex generation failure switches the remaining rounds to the API when `OPENAI_API_KEY` is available; explicit engine selections remain strict.
 
 Set an API key in the shell or a gitignored `.env` file:
 
@@ -49,6 +49,8 @@ Advisory counts are queried at report time; this tool does not hardcode a before
 | Node 20+ | Python and other non-JavaScript ecosystems |
 
 Unsupported targets fail during EXHUME with the v1 scope and the observed reason.
+
+Python remains out of scope for v1; a future v2 could apply the same observed-behavior workflow to Python packages.
 
 ## Platforms and isolation
 
