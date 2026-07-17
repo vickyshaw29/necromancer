@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { ProbeBehavior } from "../probe/index.js";
 import { buildCandidate, writeCandidateProject } from "./build.js";
@@ -12,13 +13,15 @@ import {
   ResurrectionEventCallback,
   ResurrectionResult,
   ResurrectionRound,
-  ResurrectionTarget
+  ResurrectionTarget,
+  StructuralFailureFeedback
 } from "./types.js";
 
 const MAX_ROUNDS = 6;
 const MAX_WORK_ORDER_CHARS = 96_000;
 const MAX_FAILURES_FOR_PROMPT = 50;
 const MAX_FAILURE_DETAIL_CHARS = 1_200;
+const candidateRequire = createRequire(import.meta.url);
 
 async function readWorkOrderFile(filePath: string): Promise<string> {
   let text = "";
@@ -70,6 +73,56 @@ function failedRun(total: number, detail: string): CharacterizationResult {
   return { passed: 0, total, failures: [{ id: "", detail }] };
 }
 
+function isRootExport(member: PublicApiMember, packageName: string): boolean {
+  return member.path === packageName || member.path === ".";
+}
+
+function propertyPath(member: PublicApiMember, packageName: string): string[] {
+  const relative = member.path.startsWith(`${packageName}.`) ? member.path.slice(packageName.length + 1) : member.path.replace(/^\./, "");
+  return relative.split(".").filter(Boolean);
+}
+
+function hasExport(moduleValue: unknown, segments: string[]): boolean {
+  let current = moduleValue;
+  for (const segment of segments) {
+    if (!current || (typeof current !== "object" && typeof current !== "function")) return false;
+    if (!Object.hasOwn(current, segment)) return false;
+    current = Reflect.get(current, segment);
+  }
+  return true;
+}
+
+function defaultExport(moduleValue: unknown): unknown {
+  if (!moduleValue || (typeof moduleValue !== "object" && typeof moduleValue !== "function")) return undefined;
+  return Object.hasOwn(moduleValue, "default") ? Reflect.get(moduleValue, "default") : undefined;
+}
+
+function structuralMismatch(moduleValue: unknown, packageName: string, api: PublicApiMember[]): string | undefined {
+  const root = api.find((member) => isRootExport(member, packageName));
+  const rootValue = typeof moduleValue === "function" ? moduleValue : defaultExport(moduleValue);
+  if (root?.type === "function" && typeof rootValue !== "function") return "module root is not callable";
+  const missing = api.find((member) => !isRootExport(member, packageName) && !hasExport(moduleValue, propertyPath(member, packageName)));
+  return missing ? `named export ${JSON.stringify(missing.path)} is missing` : undefined;
+}
+
+async function validateCandidateShape(rebuiltDirectory: string, packageName: string, api: PublicApiMember[]): Promise<string | undefined> {
+  const entry = path.join(rebuiltDirectory, "dist", "cjs", "index.cjs");
+  try {
+    delete candidateRequire.cache[entry];
+    return structuralMismatch(candidateRequire(entry), packageName, api);
+  } catch (error) {
+    const detail = error instanceof Error && error.message ? error.message : "candidate module could not be loaded";
+    return `candidate module could not be loaded: ${detail}`;
+  }
+}
+
+function structuralFeedback(mismatch: string): StructuralFailureFeedback {
+  if (mismatch === "module root is not callable") {
+    return { kind: "structural", instruction: "The package root export must be a callable function; the previous candidate's root was not callable (module root is not callable)." };
+  }
+  return { kind: "structural", instruction: `The package must expose the recorded named exports; the previous candidate failed the structural check: ${mismatch}.` };
+}
+
 function generationFailure(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   return "Generator failed without an error message.";
@@ -80,13 +133,17 @@ async function executeCandidate(
   source: string,
   total: number,
   round: number,
-  onEvent: ResurrectionEventCallback
+  onEvent: ResurrectionEventCallback,
+  packageName: string,
+  api: PublicApiMember[]
 ): Promise<CharacterizationResult> {
   const rebuiltDirectory = path.join(artifactDirectory, "rebuilt");
   try {
     onEvent({ type: "build-start", round });
     await writeCandidateProject(rebuiltDirectory, source);
     await buildCandidate(rebuiltDirectory);
+    const mismatch = await validateCandidateShape(rebuiltDirectory, packageName, api);
+    if (mismatch) return { passed: 0, total, failures: [], structuralFailure: mismatch };
     onEvent({ type: "test-start", round });
     return await runCharacterization(artifactDirectory);
   } catch (error) {
@@ -115,7 +172,8 @@ export async function resurrectArtifact(
   let previousSource: string | undefined;
   let feedback: FailureFeedback[] = [];
   let last: CharacterizationResult = { passed: 0, total, failures: [] };
-  const evaluate = options.evaluateCandidate ?? executeCandidate;
+  const api = publicApi(target);
+  const evaluate = options.evaluateCandidate ?? ((artifactDirectory, source, candidateTotal, round, onEvent) => executeCandidate(artifactDirectory, source, candidateTotal, round, onEvent, target.artifact.packageName, api));
   const emit: ResurrectionEventCallback = (event) => options.onEvent?.(event);
   let selectedEngine = generator.name;
   let generatedCandidate = false;
@@ -127,7 +185,7 @@ export async function resurrectArtifact(
     try {
       source = await generator.generate({
         packageName: target.artifact.packageName,
-        api: publicApi(target),
+        api,
         soul,
         soulTest,
         round,
@@ -156,6 +214,11 @@ export async function resurrectArtifact(
       throw new Error(`The emitted suite reported ${last.total} tests, but behaviors.json records ${total} observed behaviors.`);
     }
     rounds.push({ round, passed: last.passed, total, failedIds: last.failures.map((failure) => failure.id).filter(Boolean) });
+    if (last.structuralFailure) {
+      emit({ type: "round-complete", round, passed: 0, total, result: `structural failure: ${last.structuralFailure}` });
+      feedback = [structuralFeedback(last.structuralFailure)];
+      continue;
+    }
     emit({ type: "round-complete", round, passed: last.passed, total, result: `${last.passed} of ${total} observed behaviors passing` });
     if (last.passed === total) break;
     feedback = failureFeedback(target.artifact.behaviors, last);

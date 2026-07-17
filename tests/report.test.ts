@@ -251,6 +251,8 @@ describe("graveyard HTML", () => {
 
     expect(html).toContain("No quirk was recorded");
     expect(html).toContain("unknown, OSV unreachable");
+    expect(html).toContain("FAILED RECONSTRUCTION");
+    expect(html).not.toContain("PARTIAL RECONSTRUCTION");
     expect(html).not.toContain("returned identifiers:");
     expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
     expect(html).not.toContain('<img src=x onerror="alert(1)">');

@@ -10,13 +10,20 @@ export interface PublicApiMember {
   arity?: number;
 }
 
-export interface FailureFeedback {
+export interface BehaviorFailureFeedback {
   id: string;
   fn: string;
   args: JsonSafeValue[];
   expected: JsonSafeValue | SerializedError;
   actual: string;
 }
+
+export interface StructuralFailureFeedback {
+  kind: "structural";
+  instruction: string;
+}
+
+export type FailureFeedback = BehaviorFailureFeedback | StructuralFailureFeedback;
 
 export interface RebuildRequest {
   packageName: string;
@@ -42,6 +49,7 @@ export interface CharacterizationResult {
   passed: number;
   total: number;
   failures: TestFailure[];
+  structuralFailure?: string;
 }
 
 export interface ResurrectionRound {

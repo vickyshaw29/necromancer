@@ -9,7 +9,7 @@ import { loadDotEnv } from "../probe/index.js";
 import { createReport, integritySummary, ReportResult, unobservedBoundary } from "../report/index.js";
 import { RebuildEngineUnavailableError, selectRebuildGenerator } from "./engines.js";
 import { resurrectArtifact } from "./loop.js";
-import { RebuildEnginePreference } from "./types.js";
+import { RebuildEnginePreference, ResurrectionResult } from "./types.js";
 import { printBanner, printPhase, printReproducibilityHandoff, printResurrectionEngineSetup, printResurrectionEvent, printSuccess } from "../terminal.js";
 
 async function readable(filePath: string): Promise<boolean> {
@@ -64,6 +64,7 @@ function printReportSummary(report: ReportResult): void {
     ["Runtime dependencies", `${before.runtimeDependencies} → ${after.runtimeDependencies}`],
     ["Source LOC", `${before.loc.toLocaleString()} → ${after.loc.toLocaleString()}`],
     ["Provenance", `${report.provenancePath} — ${integritySummary(report.data.provenance)}`],
+    ["Result JSON", resurrection.resultPath],
     ["Graveyard report", report.reportPath]
   ];
   const width = Math.max(...rows.map(([label]) => label.length));
@@ -80,6 +81,14 @@ export interface ResurrectCommandOptions {
 export function resurrectEngine(value: string): RebuildEnginePreference {
   if (value === "auto" || value === "api" || value === "codex") return value;
   throw new Error("--engine must be one of: auto, api, codex.");
+}
+
+export function printReconstructionConclusion(result: ResurrectionResult): void {
+  if (!result.complete && result.total > 0 && result.passed === 0) {
+    console.log("\nReconstruction report written; no observed behavior was reproduced.");
+    return;
+  }
+  printSuccess(result.complete ? "Reconstruction report written." : "Reconstruction report written; some observed behaviors still differ.");
 }
 
 export async function runResurrectCommand(pkg: string, options: ResurrectCommandOptions): Promise<void> {
@@ -142,7 +151,7 @@ export async function runResurrectCommand(pkg: string, options: ResurrectCommand
     printReportSummary(report);
     console.log(`Artifact directory: ${artifactDirectory}`);
     printReproducibilityHandoff(artifactDirectory, true, true);
-    printSuccess(result.complete ? "Reconstruction report written." : "Reconstruction report written; some observed behaviors still differ.");
+    printReconstructionConclusion(result);
     if (!result.complete) process.exitCode = 3;
   } finally {
     await discardExhumedPackage(exhumed);

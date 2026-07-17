@@ -12,6 +12,7 @@ import {
   resurrectArtifact,
   selectRebuildGenerator
 } from "../src/resurrect/index.js";
+import { printReconstructionConclusion } from "../src/resurrect/command.js";
 import type { ProbeArtifact } from "../src/distill/index.js";
 import type { RebuildGenerator, RebuildRequest, ResurrectionEvent } from "../src/resurrect/index.js";
 
@@ -31,6 +32,7 @@ const artifact: ProbeArtifact = {
 
 const wrongSource = 'export default function resurrectFixture(_value: unknown): string { return "wrong"; }';
 const correctSource = 'export default function resurrectFixture(value: unknown): string { return value === true ? "yes" : "no"; }';
+const structuralWrongSource = 'export const resurrectFixture = (_value: unknown): string => "wrong";';
 const originalApiKey = process.env.OPENAI_API_KEY;
 const originalCodexTimeout = process.env.NECROMANCER_CODEX_TIMEOUT_MS;
 
@@ -95,6 +97,26 @@ describe("RESURRECT", () => {
       expect.arrayContaining([expect.objectContaining({ id: "behavior-0001", expected: "yes" }), expect.objectContaining({ id: "behavior-0002", expected: "no" })])
     );
     await expect(readFile(result.resultPath, "utf8")).resolves.toMatch(/"rounds"[\s\S]*"passed": 2[\s\S]*"complete": true/);
+  });
+
+  it("skips the full suite for a structural failure and prepends repair feedback", async () => {
+    const directory = await resurrectionWorkspace();
+    const requests: RebuildRequest[] = [];
+    const events: ResurrectionEvent[] = [];
+
+    const result = await resurrectArtifact({ artifact, artifactDirectory: directory }, generator([structuralWrongSource, correctSource], requests), {
+      onEvent: (event) => events.push(event)
+    });
+
+    expect(result.complete).toBe(true);
+    expect(events).toContainEqual({ type: "round-complete", round: 1, passed: 0, total: 2, result: "structural failure: module root is not callable" });
+    expect(events.filter((event) => event.type === "test-start")).toHaveLength(1);
+    expect(requests[1].failures).toEqual([
+      {
+        kind: "structural",
+        instruction: "The package root export must be a callable function; the previous candidate's root was not callable (module root is not callable)."
+      }
+    ]);
   });
 
   it("emits a live ledger for each resurrection round", async () => {
@@ -204,6 +226,21 @@ describe("RESURRECT", () => {
     expect(result.rounds).toHaveLength(6);
     expect(requests).toHaveLength(6);
     expect(result.passed).toBe(0);
+  });
+
+  it("prints a plain zero-pass conclusion without a success marker", async () => {
+    const directory = await resurrectionWorkspace();
+    const result = await resurrectArtifact(
+      { artifact, artifactDirectory: directory },
+      generator([wrongSource], []),
+      { async evaluateCandidate(_artifactDirectory, _source, total) { return { passed: 0, total, failures: [] }; } }
+    );
+    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    printReconstructionConclusion(result);
+
+    expect(output).toHaveBeenCalledWith("\nReconstruction report written; no observed behavior was reproduced.");
+    output.mockRestore();
   });
 
   it("stops after the first all-green candidate", async () => {

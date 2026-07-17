@@ -83,7 +83,7 @@ export function renderGraveyard(data: ReportData): string {
   const reproductionPercentage = Math.max(0, Math.min(100, ratio * 100));
   const coverage = data.artifact.coverage.branchCoverage;
   const coveragePercentage = Math.max(0, Math.min(100, coverage));
-  const state = ratio >= 0.9 ? "REVIVED" : "PARTIAL RECONSTRUCTION";
+  const state = data.resurrection.total > 0 && data.resurrection.passed === 0 ? "FAILED RECONSTRUCTION" : ratio >= 0.9 ? "REVIVED" : "PARTIAL RECONSTRUCTION";
   const fidelity = `${data.resurrection.passed} of ${data.resurrection.total} observed behaviors, ${coverage.toFixed(2)}% branch coverage of the original`;
   const observedEvidence = `${data.resurrection.passed} of ${data.resurrection.total} observed behaviors reproduced`;
   const coverageEvidence = `${coverage.toFixed(2)}% branch coverage of the original`;

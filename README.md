@@ -2,7 +2,15 @@
 
 † Behavioral reconstruction for abandoned JavaScript packages. NECROMANCER records what a small package actually does, turns those observations into a SOUL specification and characterization suite, then uses a model engine to rebuild against that suite. Its claim is deliberately bounded: a rebuild reports **N of M observed behaviors, X% branch coverage of the original**; it does not claim unobserved behavior.
 
-## Quickstart
+## Fast first look (no model needed)
+
+```sh
+node dist/cli.js probe is-number --engine heuristic
+```
+
+This records an observed-behavior probe artifact without a model; a probe normally takes seconds, while resurrection can take several minutes per model round and makes up to six rounds.
+
+## Resurrect quickstart
 
 Node 20 or newer is required. A complete run needs either an OpenAI API key or an authenticated Codex CLI for the RESURRECT phase.
 
@@ -15,6 +23,8 @@ node dist/cli.js resurrect left-pad
 ```
 
 That command fetches the package, creates artifacts under `.necromancer-cache/probes/`, and writes `SOUL.md`, `soul.test.ts`, `rebuilt/result.json`, `rebuilt/provenance.json`, and `graveyard.html` in the probe artifact. (The unrelated `necromancer` name on the npm registry belongs to another project; this tool is not published there, so run it from this repository.)
+
+`resurrect` exits 0 when all recorded behaviors are reproduced, 3 when it caps with differences, and 4 when no model engine is available.
 
 ## Engines
 
