@@ -4,7 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHeuristicSoul, renderSoulTest } from "../src/distill/index.js";
 import { writeDistillWorkspace } from "../src/distill/stage.js";
 import { codexAvailable } from "../src/probe/index.js";
-import { createApiRebuildGenerator, createAutoRebuildGenerator, resurrectArtifact, selectRebuildGenerator } from "../src/resurrect/index.js";
+import {
+  codexRebuildConfiguration,
+  createApiRebuildGenerator,
+  createAutoRebuildGenerator,
+  DEFAULT_CODEX_REBUILD_TIMEOUT_MS,
+  resurrectArtifact,
+  selectRebuildGenerator
+} from "../src/resurrect/index.js";
 import type { ProbeArtifact } from "../src/distill/index.js";
 import type { RebuildGenerator, RebuildRequest, ResurrectionEvent } from "../src/resurrect/index.js";
 
@@ -25,12 +32,15 @@ const artifact: ProbeArtifact = {
 const wrongSource = 'export default function resurrectFixture(_value: unknown): string { return "wrong"; }';
 const correctSource = 'export default function resurrectFixture(value: unknown): string { return value === true ? "yes" : "no"; }';
 const originalApiKey = process.env.OPENAI_API_KEY;
+const originalCodexTimeout = process.env.NECROMANCER_CODEX_TIMEOUT_MS;
 
 afterEach(async () => {
   await Promise.all(temporaryPaths.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
   vi.mocked(codexAvailable).mockReset();
   if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
   else process.env.OPENAI_API_KEY = originalApiKey;
+  if (originalCodexTimeout === undefined) delete process.env.NECROMANCER_CODEX_TIMEOUT_MS;
+  else process.env.NECROMANCER_CODEX_TIMEOUT_MS = originalCodexTimeout;
 });
 
 async function resurrectionWorkspace(): Promise<string> {
@@ -107,7 +117,37 @@ describe("RESURRECT", () => {
     expect(events).toContainEqual({ type: "round-complete", round: 1, passed: 2, total: 2, result: "2 of 2 observed behaviors passing" });
   });
 
-  it("selects Codex before the API and falls back to the API after a Codex failure", async () => {
+  it("records a failed generation round before retrying", async () => {
+    const directory = await resurrectionWorkspace();
+    const events: ResurrectionEvent[] = [];
+    let attempts = 0;
+    const failingThenSuccessful: RebuildGenerator = {
+      name: "stub",
+      async generate(): Promise<string> {
+        attempts += 1;
+        if (attempts === 1) throw new Error("stub generator timed out.");
+        return correctSource;
+      }
+    };
+
+    const result = await resurrectArtifact({ artifact, artifactDirectory: directory }, failingThenSuccessful, { onEvent: (event) => events.push(event) });
+
+    expect(result.complete).toBe(true);
+    expect(result.rounds.map((round) => round.passed)).toEqual([0, 2]);
+    expect(events).toContainEqual({ type: "round-complete", round: 1, passed: 0, total: 2, result: "generation failed: stub generator timed out." });
+  });
+
+  it("uses the Codex timeout environment override in its rebuild configuration", () => {
+    const notices: string[] = [];
+    process.env.NECROMANCER_CODEX_TIMEOUT_MS = "345678";
+
+    expect(codexRebuildConfiguration(process.env, (message) => notices.push(message))).toEqual({ timeoutMs: 345678 });
+    process.env.NECROMANCER_CODEX_TIMEOUT_MS = "0";
+    expect(codexRebuildConfiguration(process.env, (message) => notices.push(message))).toEqual({ timeoutMs: DEFAULT_CODEX_REBUILD_TIMEOUT_MS });
+    expect(notices).toEqual([`NECROMANCER_CODEX_TIMEOUT_MS must be a positive integer; using ${DEFAULT_CODEX_REBUILD_TIMEOUT_MS} ms.`]);
+  });
+
+  it("selects Codex before the API and switches to the API after a Codex failure", async () => {
     process.env.OPENAI_API_KEY = "test-key";
     vi.mocked(codexAvailable).mockResolvedValue(true);
 
@@ -134,9 +174,12 @@ describe("RESURRECT", () => {
 
     await expect(
       automatic.generate({ packageName: artifact.packageName, api: artifact.surface?.exports ?? [], soul: "fixture soul", soulTest: "fixture test", round: 1, failures: [] })
+    ).rejects.toThrow("Codex failed.");
+    expect(automatic.name).toBe("api");
+    await expect(
+      automatic.generate({ packageName: artifact.packageName, api: artifact.surface?.exports ?? [], soul: "fixture soul", soulTest: "fixture test", round: 2, failures: [] })
     ).resolves.toBe(correctSource);
     expect(generated).toEqual(["codex", "api"]);
-    expect(automatic.name).toBe("api");
   });
 
   it("caps an incomplete reconstruction at six rounds", async () => {

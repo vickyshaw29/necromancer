@@ -132,7 +132,7 @@ export function createCodexEngine(): InputPlanEngine {
             outputPath,
             promptFor(planRequest)
           ],
-          { cwd: planRequest.packagePath, timeoutMs: 90_000, maxOutputChars: 500 }
+          { cwd: planRequest.packagePath, timeoutMs: 180_000, maxOutputChars: 500 }
         );
         return validatePlan(JSON.parse(await readFile(outputPath, "utf8")), planRequest);
       } finally {

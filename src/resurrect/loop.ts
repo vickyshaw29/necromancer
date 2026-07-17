@@ -70,6 +70,11 @@ function failedRun(total: number, detail: string): CharacterizationResult {
   return { passed: 0, total, failures: [{ id: "", detail }] };
 }
 
+function generationFailure(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return "Generator failed without an error message.";
+}
+
 async function executeCandidate(
   artifactDirectory: string,
   source: string,
@@ -113,19 +118,33 @@ export async function resurrectArtifact(
   const evaluate = options.evaluateCandidate ?? executeCandidate;
   const emit: ResurrectionEventCallback = (event) => options.onEvent?.(event);
   let selectedEngine = generator.name;
+  let generatedCandidate = false;
   emit({ type: "engine-selected", engine: selectedEngine });
 
   for (let round = 1; round <= MAX_ROUNDS; round += 1) {
     emit({ type: "round-start", round, maxRounds: MAX_ROUNDS });
-    const source = await generator.generate({
-      packageName: target.artifact.packageName,
-      api: publicApi(target),
-      soul,
-      soulTest,
-      round,
-      previousSource,
-      failures: feedback
-    });
+    let source: string;
+    try {
+      source = await generator.generate({
+        packageName: target.artifact.packageName,
+        api: publicApi(target),
+        soul,
+        soulTest,
+        round,
+        previousSource,
+        failures: feedback
+      });
+    } catch (error) {
+      if (generator.name !== selectedEngine) {
+        selectedEngine = generator.name;
+        emit({ type: "engine-selected", engine: selectedEngine });
+      }
+      const detail = generationFailure(error);
+      rounds.push({ round, passed: 0, total, failedIds: [] });
+      emit({ type: "round-complete", round, passed: 0, total, result: `generation failed: ${detail}` });
+      continue;
+    }
+    generatedCandidate = true;
     previousSource = source;
     if (generator.name !== selectedEngine) {
       selectedEngine = generator.name;
@@ -140,6 +159,10 @@ export async function resurrectArtifact(
     emit({ type: "round-complete", round, passed: last.passed, total, result: `${last.passed} of ${total} observed behaviors passing` });
     if (last.passed === total) break;
     feedback = failureFeedback(target.artifact.behaviors, last);
+  }
+
+  if (!generatedCandidate) {
+    throw new Error(`No reconstruction candidate was generated in ${MAX_ROUNDS} rounds. Review the recorded generation failures and retry.`);
   }
 
   const complete = last.passed === total;

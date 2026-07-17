@@ -26,6 +26,8 @@ PROBE and DISTILL use `api → codex → heuristic` automatically: the OpenAI AP
 
 RESURRECT requires a model engine because emitting a meaningful implementation is not a heuristic operation. It auto-selects Codex CLI then the OpenAI API, or accepts `--engine api` / `--engine codex`; if neither is available, it exits before EXHUME with a clear setup message and does not fabricate a rebuild. In automatic mode, a Codex generation failure switches the remaining rounds to the API when `OPENAI_API_KEY` is available; explicit engine selections remain strict.
 
+Codex rebuild generations allow 10 minutes per round by default; set `NECROMANCER_CODEX_TIMEOUT_MS` to a positive integer millisecond value to override it.
+
 Set an API key in the shell or a gitignored `.env` file:
 
 ```sh

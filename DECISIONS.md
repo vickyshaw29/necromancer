@@ -31,3 +31,4 @@
 2026-07-17 — Argument artifacts escape ordinary objects that contain the `$necromancer` tag key, while emitted tests revive only exact sentinels; this preserves literal data keys without changing established special-value tags.
 2026-07-17 — OpenAI structured-output requests and guarded child-process execution are shared because each has three or more concrete pipeline callers; c8 reporting now has the same bounded process behavior.
 2026-07-17 — A rebuilt package with no declared runtime dependencies completes the OSV scan locally without a network request; non-empty scans retain the per-request 10-second fallback behavior.
+2026-07-17 — Codex rebuild generations default to a 10-minute validated timeout, while failed generation attempts consume one of the six rounds so strict selections retry and automatic mode continues with its API fallback.

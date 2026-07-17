@@ -13,6 +13,12 @@ const REBUILD_SCHEMA = {
   properties: { source: { type: "string" } }
 };
 
+export const DEFAULT_CODEX_REBUILD_TIMEOUT_MS = 600_000;
+
+export interface CodexRebuildConfiguration {
+  timeoutMs: number;
+}
+
 export class RebuildEngineUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -43,6 +49,24 @@ function promptFor(request: RebuildRequest): string {
   ].join("\n\n");
 }
 
+export function codexRebuildConfiguration(
+  environment: NodeJS.ProcessEnv = process.env,
+  onNotice: (message: string) => void = (message) => console.error(`[RESURRECT] ${message}`)
+): CodexRebuildConfiguration {
+  const configured = environment.NECROMANCER_CODEX_TIMEOUT_MS;
+  if (configured === undefined) return { timeoutMs: DEFAULT_CODEX_REBUILD_TIMEOUT_MS };
+  if (!/^[1-9]\d*$/.test(configured)) {
+    onNotice(`NECROMANCER_CODEX_TIMEOUT_MS must be a positive integer; using ${DEFAULT_CODEX_REBUILD_TIMEOUT_MS} ms.`);
+    return { timeoutMs: DEFAULT_CODEX_REBUILD_TIMEOUT_MS };
+  }
+  const timeoutMs = Number(configured);
+  if (!Number.isSafeInteger(timeoutMs)) {
+    onNotice(`NECROMANCER_CODEX_TIMEOUT_MS must be a positive integer; using ${DEFAULT_CODEX_REBUILD_TIMEOUT_MS} ms.`);
+    return { timeoutMs: DEFAULT_CODEX_REBUILD_TIMEOUT_MS };
+  }
+  return { timeoutMs };
+}
+
 export function createApiRebuildGenerator(apiKey: string, request: typeof fetch = fetch): RebuildGenerator {
   return {
     name: "api",
@@ -70,7 +94,7 @@ async function writeWorkOrder(directory: string, request: RebuildRequest): Promi
   ]);
 }
 
-export function createCodexRebuildGenerator(): RebuildGenerator {
+export function createCodexRebuildGenerator(configuration: CodexRebuildConfiguration = codexRebuildConfiguration()): RebuildGenerator {
   return {
     name: "codex",
     async generate(request): Promise<string> {
@@ -97,7 +121,7 @@ export function createCodexRebuildGenerator(): RebuildGenerator {
             outputPath,
             "Read the supplied work-order files. Return only the required JSON TypeScript source. Do not inspect or reference any original package source."
           ],
-          { cwd: directory, timeoutMs: 120_000 }
+          { cwd: directory, timeoutMs: configuration.timeoutMs }
         );
         if (result.code !== 0) throw new Error(`codex exited with ${result.code}: ${(result.stderr || result.stdout).trim() || "no output"}`);
         return sourceFrom(JSON.parse(await readFile(outputPath, "utf8")));
@@ -120,7 +144,7 @@ export function createAutoRebuildGenerator(primary: RebuildGenerator, fallback: 
       } catch (error) {
         if (!fallback || active === fallback) throw error;
         active = fallback;
-        return active.generate(request);
+        throw error;
       }
     }
   };
