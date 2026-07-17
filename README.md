@@ -52,6 +52,25 @@ Unsupported targets fail during EXHUME with the v1 scope and the observed reason
 
 Python remains out of scope for v1; a future v2 could apply the same observed-behavior workflow to Python packages.
 
+## Empirical range (2026-07-17 sweep)
+
+A ten-package sweep with the deterministic heuristic planner (`probe --fast --engine heuristic`) produced these observed results. They describe this sweep only, not a guarantee for all of npm.
+
+| Target | Deterministic behaviors | Branch coverage of original | Result |
+| --- | --- | --- | --- |
+| `arr-diff@4.0.0` | 47 | 66.66% | probed clean |
+| `camelcase@9.0.0` | 60 | 68.18% | probed clean |
+| `clone@2.1.2` | 60 | 50.00% | probed clean |
+| `dedent@1.7.2` | 60 | 53.84% | probed clean |
+| `escape-string-regexp@5.0.0` | 51 | 100.00% | probed clean |
+| `is-plain-object@5.0.0` | 45 | 75.00% | probed clean |
+| `mime-types@3.0.2` | 60 | 75.43% | probed clean |
+| `ms@2.1.3` | 60 | 58.18% | probed clean |
+| `object-assign@4.1.1` | 60 | 45.45% | probed clean |
+| `rimraf` | — | — | OUT_OF_SCOPE: 8 runtime dependencies (v1 caps at 3); accesses the filesystem |
+
+Every run ended with either a recorded artifact or the friendly scope message — no hangs and no raw stack traces. `--fast` caps recording at 60 behaviors, which several targets reached; the API and Codex planners typically discover more semantic inputs than the heuristic used here.
+
 ## Platforms and isolation
 
 Supported platforms are macOS, Linux, and Windows with Node 20+. Docker is optional: it isolates the bare package install and inspection step when available. Behavioral probing always uses the reduced-isolation child process because V8 coverage must write locally; that runner scrubs its environment and blocks common network and process-control modules, but it is not full containment. Run untrusted packages on a disposable machine or VM.
