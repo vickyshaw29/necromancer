@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { pathToFileURL } from "node:url";
 import { discardExhumedPackage, exhume, ScopeReason, TriageResult } from "./exhume/index.js";
+import { createSandboxRunner, SandboxRunner } from "./sandbox/index.js";
 
 function marker(value: boolean): string {
   return value ? "detected" : "none";
@@ -42,11 +43,13 @@ export async function runCli(argv: string[]): Promise<void> {
     .description("Resurrect abandoned JavaScript packages from observed behavior.")
     .argument("<pkg>", "npm package name, optionally with @version")
     .option("--keep-workspace", "keep the temporary EXHUME workspace for inspection")
-    .action(async (pkg: string, options: { keepWorkspace?: boolean }) => {
+    .option("--no-docker", "use the reduced-isolation child-process sandbox")
+    .action(async (pkg: string, options: { keepWorkspace?: boolean; docker?: boolean }) => {
       console.log("💀 NECROMANCER");
       console.log("[1/6] EXHUME      Fetching npm tarball and performing static triage…");
 
       const exhumed = await exhume(pkg);
+      let sandbox: SandboxRunner | undefined;
       try {
         printTriage(exhumed.manifest.name, exhumed.manifest.version, exhumed.triage);
         if (exhumed.triage.verdict === "OUT_OF_SCOPE") {
@@ -56,13 +59,22 @@ export async function runCli(argv: string[]): Promise<void> {
         }
 
         console.log("\nIN_SCOPE — static triage passed.");
-        console.log("[2/6] SANDBOX     queued for Milestone 2");
+        console.log("[2/6] SANDBOX     Installing package in an isolated runner…");
+        sandbox = await createSandboxRunner(
+          { packagePath: exhumed.packagePath, packageName: exhumed.manifest.name },
+          {
+            noDocker: options.docker === false,
+            onWarning: (message) => console.error(message)
+          }
+        );
+        console.log(`[2/6] SANDBOX     Ready (${sandbox.mode} runner).`);
         console.log("[3/6] PROBE       queued for Milestone 3");
         console.log("[4/6] DISTILL     queued for Milestone 4");
         console.log("[5/6] RESURRECT   queued for Milestone 5");
         console.log("[6/6] REPORT      queued for Milestone 6");
         if (options.keepWorkspace) console.log(`\nEXHUME workspace retained: ${exhumed.workspacePath}`);
       } finally {
+        await sandbox?.dispose();
         if (!options.keepWorkspace) await discardExhumedPackage(exhumed);
       }
     });
@@ -73,7 +85,7 @@ export async function runCli(argv: string[]): Promise<void> {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runCli(process.argv).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : "Unexpected failure.";
-    console.error(`Necromancer could not exhume this package: ${message}`);
+    console.error(`Necromancer could not complete this package: ${message}`);
     process.exitCode = 1;
   });
 }
