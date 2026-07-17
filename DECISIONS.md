@@ -9,3 +9,8 @@
 2026-07-17 — Probe numeric boundaries cap at 10,000 to exercise large inputs without inducing unbounded output allocation; individual runner failures are discarded with a notice instead of aborting the probe.
 2026-07-17 — c8 and fast-check are runtime dependencies because M3 collects c8 coverage and generates fast-check mutations in the installed CLI; JSON `unknown` narrowing is localized at external model, c8, and artifact boundaries with runtime shape checks.
 2026-07-17 — On this machine, `codex exec` exits because its local model cache is malformed; auto mode correctly records the notice and continues with the deterministic heuristic planner, which was used for live acceptance.
+2026-07-17 — DISTILL reuses the most recent valid probe artifact for the resolved package name and version; if none exists, `necromancer distill <pkg>` runs the same child-instrumented probe before writing artifacts.
+2026-07-17 — `NECROMANCER_IMPL` is an artifact-directory-relative or absolute implementation path; omitted means `original/package`, while a rebuild can be selected with a path such as `rebuilt`.
+2026-07-17 — Model-written SOUL prose must retain the required observed-fidelity sentence, sections, and every evidence ID; invalid API or Codex output falls back to the deterministic heuristic writer.
+2026-07-17 — DISTILL emits a local Vitest configuration beside `soul.test.ts` so the characterization suite remains runnable from its artifact workspace rather than inheriting the repository test glob.
+2026-07-17 — Staging the original package installs only declared runtime dependencies with lifecycle scripts disabled and a 60-second cap, so emitted tests can resolve in-scope dependency trees without an unbounded install.

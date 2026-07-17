@@ -1,0 +1,184 @@
+import { ProbeArtifact } from "./types.js";
+
+function templateData(artifact: ProbeArtifact): string {
+  return JSON.stringify(artifact.behaviors, null, 2);
+}
+
+export function renderSoulTest(artifact: ProbeArtifact): string {
+  return `import { expect, test } from "vitest";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+type ErrorShape = { name: string; message: string };
+type Behavior = { id: string; fn: string; args: unknown[]; result?: unknown; throw?: ErrorShape };
+const MAX_DEPTH = 64;
+const MAX_ENTRIES = 1_000;
+
+const workspace = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const packageName = ${JSON.stringify(artifact.packageName)};
+const behaviors: Behavior[] = ${templateData(artifact)};
+const implementationInput = process.env.NECROMANCER_IMPL ?? "original/package";
+const implementationPath = path.resolve(workspace, implementationInput);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function revive(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(revive);
+  if (!isRecord(value)) return value;
+  const record = value;
+  if (record.$necromancer === "undefined") return undefined;
+  if (record.$necromancer === "bigint" && typeof record.value === "string") return BigInt(record.value);
+  if (record.$necromancer === "number") {
+    if (record.value === "NaN") return Number.NaN;
+    if (record.value === "Infinity") return Infinity;
+    if (record.value === "-Infinity") return -Infinity;
+    if (record.value === "-0") return -0;
+  }
+  const output: Record<string, unknown> = Object.create(null);
+  for (const [key, item] of Object.entries(record)) output[key] = revive(item);
+  return output;
+}
+
+function tagged(kind: string, details: Record<string, unknown> = {}): Record<string, unknown> {
+  return { $necromancer: kind, ...details };
+}
+
+function errorMessage(error: unknown): string {
+  return isRecord(error) && "message" in error ? String(error.message) : String(error);
+}
+
+function jsonSafe(value: unknown, valuePath = "$", ancestors = new Map<object, string>(), depth = 0): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (value === undefined) return tagged("undefined");
+  if (typeof value === "bigint") return tagged("bigint", { value: value.toString() });
+  if (typeof value === "number") {
+    if (Number.isNaN(value)) return tagged("number", { value: "NaN" });
+    if (value === Infinity) return tagged("number", { value: "Infinity" });
+    if (value === -Infinity) return tagged("number", { value: "-Infinity" });
+    if (Object.is(value, -0)) return tagged("number", { value: "-0" });
+    return value;
+  }
+  if (typeof value === "symbol") return tagged("symbol", { value: String(value) });
+  if (typeof value === "function") return tagged("function", { name: value.name || null });
+  if (depth >= MAX_DEPTH) return tagged("truncated", { reason: "max_depth" });
+  if (ancestors.has(value)) return tagged("circular", { path: ancestors.get(value) });
+  try {
+    if (value instanceof Error) return tagged("error", { name: value.name || "Error", message: String(value.message || "") });
+    if (value instanceof Date) return tagged("date", { value: Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString() });
+    if (value instanceof RegExp) return tagged("regexp", { value: value.toString() });
+    if (Buffer.isBuffer(value)) return tagged("buffer", { encoding: "base64", value: value.toString("base64") });
+    ancestors.set(value, valuePath);
+    if (Array.isArray(value)) {
+      const entries = value.slice(0, MAX_ENTRIES).map((item, index) => jsonSafe(item, "\${valuePath}[\${index}]", ancestors, depth + 1));
+      if (value.length > MAX_ENTRIES) entries.push(tagged("truncated", { reason: "max_entries" }));
+      ancestors.delete(value);
+      return entries;
+    }
+    if (value instanceof Map) {
+      const entries: unknown[] = [];
+      let index = 0;
+      for (const [key, item] of value) {
+        if (index >= MAX_ENTRIES) {
+          entries.push(tagged("truncated", { reason: "max_entries" }));
+          break;
+        }
+        entries.push([jsonSafe(key, "\${valuePath}.<key\${index}>", ancestors, depth + 1), jsonSafe(item, "\${valuePath}.<value\${index}>", ancestors, depth + 1)]);
+        index += 1;
+      }
+      ancestors.delete(value);
+      return tagged("map", { entries });
+    }
+    if (value instanceof Set) {
+      const entries: unknown[] = [];
+      let index = 0;
+      for (const item of value) {
+        if (index >= MAX_ENTRIES) {
+          entries.push(tagged("truncated", { reason: "max_entries" }));
+          break;
+        }
+        entries.push(jsonSafe(item, "\${valuePath}.<set\${index}>", ancestors, depth + 1));
+        index += 1;
+      }
+      ancestors.delete(value);
+      return tagged("set", { entries });
+    }
+    const output: Record<string, unknown> = Object.create(null);
+    const keys = Object.keys(value);
+    for (const [index, key] of keys.slice(0, MAX_ENTRIES).entries()) {
+      try {
+        output[key] = jsonSafe(Reflect.get(value, key), "\${valuePath}.\${key}", ancestors, depth + 1);
+      } catch (error) {
+        output[key] = tagged("unreadable", { message: errorMessage(error) });
+      }
+      if (index + 1 === MAX_ENTRIES && keys.length > MAX_ENTRIES) output.$truncated = tagged("truncated", { reason: "max_entries" });
+    }
+    return output;
+  } catch (error) {
+    return tagged("unserializable", { message: errorMessage(error) });
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function errorShape(error: unknown): ErrorShape {
+  if (isRecord(error)) {
+    const value = error;
+    return { name: typeof value.name === "string" ? value.name : "Error", message: String(value.message ?? "") };
+  }
+  return { name: "Error", message: String(error) };
+}
+
+function isEsmError(error: unknown): boolean {
+  return isRecord(error) && error.code === "ERR_REQUIRE_ESM";
+}
+
+async function loadImplementation(id: string): Promise<unknown> {
+  const entry = require.resolve(implementationPath);
+  delete require.cache[entry];
+  try {
+    return require(entry);
+  } catch (error) {
+    if (!isEsmError(error)) throw error;
+    return import("\${pathToFileURL(entry).href}?behavior=\${encodeURIComponent(id)}");
+  }
+}
+
+function resolveFunction(moduleValue: unknown, exportPath: string): (...args: unknown[]) => unknown {
+  if (!moduleValue || (typeof moduleValue !== "object" && typeof moduleValue !== "function")) throw new TypeError("Implementation did not export a module value.");
+  if (exportPath === packageName || exportPath === ".") {
+    const root = typeof moduleValue === "function" ? moduleValue : isRecord(moduleValue) ? moduleValue.default : undefined;
+    if (typeof root !== "function") throw new TypeError("Module root is not callable.");
+    return root;
+  }
+  const propertyPath = exportPath.startsWith(packageName + ".") ? exportPath.slice(packageName.length + 1) : exportPath.replace(/^\./, "");
+  let current: unknown = moduleValue;
+  for (const segment of propertyPath.split(".")) {
+    if (!segment) continue;
+    current = current && (typeof current === "object" || typeof current === "function") ? Reflect.get(current, segment) : undefined;
+  }
+  if (typeof current !== "function") throw new TypeError("Recorded export " + JSON.stringify(exportPath) + " is not callable.");
+  return current;
+}
+
+for (const behavior of behaviors) {
+  test("\${behavior.id} — \${behavior.fn}", async () => {
+    try {
+      const moduleValue = await loadImplementation(behavior.id);
+      const args = revive(behavior.args);
+      if (!Array.isArray(args)) throw new TypeError("Recorded arguments are not an array.");
+      const value = await resolveFunction(moduleValue, behavior.fn)(...args);
+      if (!("result" in behavior)) throw new Error("Expected recorded throw but implementation returned.");
+      expect(jsonSafe(value)).toEqual(behavior.result);
+    } catch (error) {
+      if (!("throw" in behavior)) throw error;
+      expect(errorShape(error)).toEqual(behavior.throw);
+    }
+  });
+}
+`;
+}

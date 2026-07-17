@@ -4,6 +4,7 @@ module.exports = function edgeValue(kind) {
   if (kind === "infinity") return Infinity;
   if (kind === "negative-infinity") return -Infinity;
   if (kind === "bigint") return 9007199254740993n;
+  if (kind === "map") return new Map([["key", 1]]);
   if (kind === "circular") {
     const value = { name: "cycle" };
     value.self = value;

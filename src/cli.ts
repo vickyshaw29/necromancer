@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { distillEngine, runDistillCommand } from "./distill/command.js";
 import { discardExhumedPackage, exhume, ScopeReason, TriageResult } from "./exhume/index.js";
 import { loadDotEnv, probePackage, ProbeEnginePreference } from "./probe/index.js";
 import { createSandboxRunner, SandboxRunner } from "./sandbox/index.js";
@@ -109,7 +110,7 @@ async function runProbeCommand(
     }
     console.log(`Input planner: ${result.engine}`);
     console.log(`Artifacts: ${result.artifactPath}`);
-    console.log("[4/6] DISTILL     queued for Milestone 4");
+    console.log("[4/6] DISTILL     available: necromancer distill <pkg>");
     console.log("[5/6] RESURRECT   queued for Milestone 5");
     console.log("[6/6] REPORT      queued for Milestone 6");
   } finally {
@@ -151,7 +152,7 @@ export async function runCli(argv: string[]): Promise<void> {
         );
         console.log(`[2/6] SANDBOX     Ready (${sandbox.mode} runner).`);
         console.log("[3/6] PROBE       queued for Milestone 3");
-        console.log("[4/6] DISTILL     queued for Milestone 4");
+        console.log("[4/6] DISTILL     available: necromancer distill <pkg>");
         console.log("[5/6] RESURRECT   queued for Milestone 5");
         console.log("[6/6] REPORT      queued for Milestone 6");
         if (options.keepWorkspace) console.log(`\nEXHUME workspace retained: ${exhumed.workspacePath}`);
@@ -169,6 +170,14 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--engine <engine>", "input planner: auto, api, codex, or heuristic", probeEngine, "auto")
     .option("--output <directory>", "directory for behaviors.json and coverage artifacts")
     .action(runProbeCommand);
+
+  program
+    .command("distill <pkg>")
+    .description("write a SOUL.md and deterministic tests from observed package behavior")
+    .option("--max-behaviors <count>", "maximum deterministic behaviors when a probe is needed", positiveInteger, 80)
+    .option("--fast", "cap an automatically-run probe at 60 behaviors")
+    .option("--engine <engine>", "prose and input planner: auto, api, codex, or heuristic", distillEngine, "auto")
+    .action(runDistillCommand);
 
   await program.parseAsync(argv);
 }
