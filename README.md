@@ -7,18 +7,14 @@
 Node 20 or newer is required. A complete run needs either an OpenAI API key or an authenticated Codex CLI for the RESURRECT phase.
 
 ```sh
-npx necromancer resurrect left-pad
-```
-
-That command fetches the package, creates artifacts under `.necromancer-cache/probes/`, and writes `SOUL.md`, `soul.test.ts`, `rebuilt/`, `result.json`, and `graveyard.html` beside the probe artifact.
-
-For local development:
-
-```sh
+git clone https://github.com/vickyshaw29/necromancer.git
+cd necromancer
 npm install
 npm run build
-node dist/cli.js resurrect is-odd --engine codex
+node dist/cli.js resurrect left-pad
 ```
+
+That command fetches the package, creates artifacts under `.necromancer-cache/probes/`, and writes `SOUL.md`, `soul.test.ts`, `rebuilt/`, `result.json`, and `graveyard.html` beside the probe artifact. (The unrelated `necromancer` name on the npm registry belongs to another project; this tool is not published there, so run it from this repository.)
 
 ## Engines
 
