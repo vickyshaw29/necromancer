@@ -3,6 +3,7 @@ import { createProbeArtifactDirectory, findLatestProbeArtifact } from "../artifa
 import { discardExhumedPackage, exhume, ScopeReason } from "../exhume/index.js";
 import { loadDotEnv, probePackage, ProbeEnginePreference } from "../probe/index.js";
 import { createSandboxRunner, SandboxRunner } from "../sandbox/index.js";
+import { printBanner, printPhase } from "../terminal.js";
 import { readProbeArtifact } from "./artifact.js";
 import { distillArtifact } from "./index.js";
 import { DistillEnginePreference } from "./types.js";
@@ -32,12 +33,12 @@ export async function probeIntoArtifact(
   const coverageDirectory = path.join(artifactDirectory, ".v8-coverage");
   let sandbox: SandboxRunner | undefined;
   try {
-    console.log("[2/6] SANDBOX     Preparing child-process instrumentation for coverage…");
+    printPhase(2, "SANDBOX", "Preparing child-process instrumentation for coverage…");
     sandbox = await createSandboxRunner(
       { packageName, packagePath },
       { coverageDirectory, onWarning: (message) => console.error(message) }
     );
-    console.log("[3/6] PROBE       Discovering deterministic observed behaviors…");
+    printPhase(3, "PROBE", "Discovering deterministic observed behaviors…");
     const maxBehaviors = options.fast ? Math.min(options.maxBehaviors, 60) : options.maxBehaviors;
     await probePackage(
       { packageName, packagePath, sandbox, artifactDirectory },
@@ -59,8 +60,8 @@ export function distillEngine(value: string): CommandEngine {
 
 export async function runDistillCommand(pkg: string, options: DistillCommandOptions): Promise<void> {
   await loadDotEnv();
-  console.log("💀 NECROMANCER");
-  console.log("[1/6] EXHUME      Fetching npm tarball and performing static triage…");
+  printBanner();
+  printPhase(1, "EXHUME", "Fetching npm tarball and performing static triage…");
   const exhumed = await exhume(pkg);
   try {
     console.log(`  Package              ${exhumed.manifest.name}@${exhumed.manifest.version}`);
@@ -73,21 +74,21 @@ export async function runDistillCommand(pkg: string, options: DistillCommandOpti
 
     let artifactDirectory = await findLatestProbeArtifact(exhumed.manifest.name, exhumed.manifest.version);
     if (artifactDirectory) {
-      console.log(`[3/6] PROBE       Reusing ${path.join(artifactDirectory, "behaviors.json")}`);
+      printPhase(3, "PROBE", `Reusing ${path.join(artifactDirectory, "behaviors.json")}`);
     } else {
       artifactDirectory = await createProbeArtifactDirectory(exhumed.manifest.name, exhumed.manifest.version);
       await probeIntoArtifact(exhumed.manifest.name, exhumed.packagePath, artifactDirectory, options);
     }
     const artifact = await readProbeArtifact(path.join(artifactDirectory, "behaviors.json"));
-    console.log("[4/6] DISTILL     Writing SOUL.md and deterministic characterization tests…");
+    printPhase(4, "DISTILL", "Writing SOUL.md and deterministic characterization tests…");
     const result = await distillArtifact(artifact, exhumed.packagePath, artifactDirectory, {
       engine: options.engine,
       onNotice: (message) => console.error(message)
     });
     console.log(`DISTILL writer: ${result.engine}`);
     console.log(`Artifacts: ${result.soulPath}, ${result.testPath}`);
-    console.log("[5/6] RESURRECT   available: necromancer resurrect <pkg>");
-    console.log("[6/6] REPORT      queued for Milestone 6");
+    printPhase(5, "RESURRECT", "Available: necromancer resurrect <pkg>");
+    printPhase(6, "REPORT", "Available after resurrection.");
   } finally {
     await discardExhumedPackage(exhumed);
   }

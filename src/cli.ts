@@ -8,6 +8,7 @@ import { discardExhumedPackage, exhume, ScopeReason, TriageResult } from "./exhu
 import { loadDotEnv, probePackage, ProbeEnginePreference } from "./probe/index.js";
 import { resurrectEngine, runResurrectCommand } from "./resurrect/command.js";
 import { createSandboxRunner, SandboxRunner } from "./sandbox/index.js";
+import { printBanner, printPhase } from "./terminal.js";
 
 function marker(value: boolean): string {
   return value ? "detected" : "none";
@@ -72,8 +73,8 @@ async function runProbeCommand(
   options: { maxBehaviors: number; fast?: boolean; engine: ProbeEnginePreference; output?: string }
 ): Promise<void> {
   await loadDotEnv();
-  console.log("💀 NECROMANCER");
-  console.log("[1/6] EXHUME      Fetching npm tarball and performing static triage…");
+  printBanner();
+  printPhase(1, "EXHUME", "Fetching npm tarball and performing static triage…");
   const exhumed = await exhume(pkg);
   let sandbox: SandboxRunner | undefined;
   try {
@@ -86,12 +87,12 @@ async function runProbeCommand(
 
     const artifactDirectory = await probeArtifactDirectory(exhumed.manifest.name, exhumed.manifest.version, options.output);
     const coverageDirectory = path.join(artifactDirectory, ".v8-coverage");
-    console.log("\n[2/6] SANDBOX     Preparing child-process instrumentation for coverage…");
+    printPhase(2, "SANDBOX", "Preparing child-process instrumentation for coverage…");
     sandbox = await createSandboxRunner(
       { packagePath: exhumed.packagePath, packageName: exhumed.manifest.name },
       { coverageDirectory, onWarning: (message) => console.error(message) }
     );
-    console.log("[3/6] PROBE        Discovering exports, examples, and deterministic behaviors…");
+    printPhase(3, "PROBE", "Discovering exports, examples, and deterministic behaviors…");
     const maxBehaviors = options.fast ? Math.min(options.maxBehaviors, 60) : options.maxBehaviors;
     const result = await probePackage(
       {
@@ -111,9 +112,9 @@ async function runProbeCommand(
     }
     console.log(`Input planner: ${result.engine}`);
     console.log(`Artifacts: ${result.artifactPath}`);
-    console.log("[4/6] DISTILL     available: necromancer distill <pkg>");
-    console.log("[5/6] RESURRECT   available: necromancer resurrect <pkg>");
-    console.log("[6/6] REPORT      queued for Milestone 6");
+    printPhase(4, "DISTILL", "Available: necromancer distill <pkg>");
+    printPhase(5, "RESURRECT", "Available: necromancer resurrect <pkg>");
+    printPhase(6, "REPORT", "Available after resurrection.");
   } finally {
     await sandbox?.dispose();
     await discardExhumedPackage(exhumed);
@@ -129,8 +130,8 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--keep-workspace", "keep the temporary EXHUME workspace for inspection")
     .option("--no-docker", "use the reduced-isolation child-process sandbox")
     .action(async (pkg: string, options: { keepWorkspace?: boolean; docker?: boolean }) => {
-      console.log("💀 NECROMANCER");
-      console.log("[1/6] EXHUME      Fetching npm tarball and performing static triage…");
+      printBanner();
+      printPhase(1, "EXHUME", "Fetching npm tarball and performing static triage…");
 
       const exhumed = await exhume(pkg);
       let sandbox: SandboxRunner | undefined;
@@ -143,7 +144,7 @@ export async function runCli(argv: string[]): Promise<void> {
         }
 
         console.log("\nIN_SCOPE — static triage passed.");
-        console.log("[2/6] SANDBOX     Installing package in an isolated runner…");
+        printPhase(2, "SANDBOX", "Installing package in an isolated runner…");
         sandbox = await createSandboxRunner(
           { packagePath: exhumed.packagePath, packageName: exhumed.manifest.name },
           {
@@ -151,11 +152,11 @@ export async function runCli(argv: string[]): Promise<void> {
             onWarning: (message) => console.error(message)
           }
         );
-        console.log(`[2/6] SANDBOX     Ready (${sandbox.mode} runner).`);
-        console.log("[3/6] PROBE       queued for Milestone 3");
-        console.log("[4/6] DISTILL     available: necromancer distill <pkg>");
-        console.log("[5/6] RESURRECT   available: necromancer resurrect <pkg>");
-        console.log("[6/6] REPORT      queued for Milestone 6");
+        printPhase(2, "SANDBOX", `Ready (${sandbox.mode} runner).`);
+        printPhase(3, "PROBE", "Available: necromancer probe <pkg>");
+        printPhase(4, "DISTILL", "Available: necromancer distill <pkg>");
+        printPhase(5, "RESURRECT", "Available: necromancer resurrect <pkg>");
+        printPhase(6, "REPORT", "Available after resurrection.");
         if (options.keepWorkspace) console.log(`\nEXHUME workspace retained: ${exhumed.workspacePath}`);
       } finally {
         await sandbox?.dispose();

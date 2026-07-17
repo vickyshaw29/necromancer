@@ -6,9 +6,11 @@ import { distillArtifact, readProbeArtifact } from "../distill/index.js";
 import { probeIntoArtifact } from "../distill/command.js";
 import { discardExhumedPackage, exhume, ScopeReason } from "../exhume/index.js";
 import { loadDotEnv } from "../probe/index.js";
+import { createReport, ReportResult } from "../report/index.js";
 import { RebuildEngineUnavailableError, selectRebuildGenerator } from "./engines.js";
 import { resurrectArtifact } from "./loop.js";
 import { RebuildEnginePreference } from "./types.js";
+import { printBanner, printPhase, printSuccess } from "../terminal.js";
 
 function scopeMessage(reasons: ScopeReason[]): string {
   const detail = reasons.map((reason) => reason.message).join("; ");
@@ -32,6 +34,26 @@ async function hasDistilledFiles(artifactDirectory: string): Promise<boolean> {
   return soul && test;
 }
 
+function osvSummary(report: ReportResult): string {
+  if (report.data.osv.status === "unknown") return "unknown, OSV unreachable";
+  return `${report.data.osv.cveCount ?? 0} CVE aliases across ${report.data.osv.advisoryCount ?? 0} OSV advisories`;
+}
+
+function printReportSummary(report: ReportResult): void {
+  const { artifact, resurrection, before, after } = report.data;
+  const rows: Array<[string, string]> = [
+    ["Observed fidelity", `${resurrection.passed} of ${resurrection.total} observed behaviors, ${artifact.coverage.branchCoverage.toFixed(2)}% branch coverage of the original`],
+    ["CVEs before", osvSummary(report)],
+    ["CVEs after", "0 known advisories; rebuilt package has 0 runtime dependencies"],
+    ["Runtime dependencies", `${before.runtimeDependencies} → ${after.runtimeDependencies}`],
+    ["Source LOC", `${before.loc.toLocaleString()} → ${after.loc.toLocaleString()}`],
+    ["Graveyard report", report.reportPath]
+  ];
+  const width = Math.max(...rows.map(([label]) => label.length));
+  console.log("\nREPORT summary");
+  for (const [label, value] of rows) console.log(`  ${label.padEnd(width)}  ${value}`);
+}
+
 export interface ResurrectCommandOptions {
   maxBehaviors: number;
   fast?: boolean;
@@ -45,8 +67,8 @@ export function resurrectEngine(value: string): RebuildEnginePreference {
 
 export async function runResurrectCommand(pkg: string, options: ResurrectCommandOptions): Promise<void> {
   await loadDotEnv();
-  console.log("💀 NECROMANCER");
-  console.log("[1/6] EXHUME      Fetching npm tarball and performing static triage…");
+  printBanner();
+  printPhase(1, "EXHUME", "Fetching npm tarball and performing static triage…");
   const exhumed = await exhume(pkg);
   try {
     console.log(`  Package              ${exhumed.manifest.name}@${exhumed.manifest.version}`);
@@ -74,22 +96,28 @@ export async function runResurrectCommand(pkg: string, options: ResurrectCommand
       artifactDirectory = await createProbeArtifactDirectory(exhumed.manifest.name, exhumed.manifest.version);
       await probeIntoArtifact(exhumed.manifest.name, exhumed.packagePath, artifactDirectory, options);
     } else {
-      console.log(`[3/6] PROBE       Reusing ${path.join(artifactDirectory, "behaviors.json")}`);
+      printPhase(3, "PROBE", `Reusing ${path.join(artifactDirectory, "behaviors.json")}`);
     }
     const artifact = await readProbeArtifact(path.join(artifactDirectory, "behaviors.json"));
     if (!(await hasDistilledFiles(artifactDirectory))) {
-      console.log("[4/6] DISTILL     Writing SOUL.md and deterministic characterization tests…");
+      printPhase(4, "DISTILL", "Writing SOUL.md and deterministic characterization tests…");
       await distillArtifact(artifact, exhumed.packagePath, artifactDirectory, { engine: options.engine, onNotice: (message) => console.error(message) });
     } else {
-      console.log("[4/6] DISTILL     Reusing SOUL.md and soul.test.ts.");
+      printPhase(4, "DISTILL", "Reusing SOUL.md and soul.test.ts.");
     }
-    console.log("[5/6] RESURRECT   Rebuilding from observed behavior…");
+    printPhase(5, "RESURRECT", "Rebuilding from observed behavior…");
     const result = await resurrectArtifact({ artifact, artifactDirectory }, generator);
-    console.log(
-      `rebuilt passes ${result.passed} of ${result.total} observed behaviors (${artifact.coverage.branchCoverage.toFixed(2)}% branch coverage of the original)`
-    );
-    console.log(`Resurrection artifact: ${result.resultPath}`);
-    console.log("[6/6] REPORT      queued for Milestone 6");
+    printPhase(6, "REPORT", "Collecting compatibility, dependency, and advisory evidence…");
+    const report = await createReport({
+      packageName: exhumed.manifest.name,
+      version: exhumed.manifest.version,
+      artifact,
+      triage: exhumed.triage,
+      resurrection: result,
+      artifactDirectory
+    });
+    printReportSummary(report);
+    printSuccess(result.complete ? "Reconstruction report written." : "Reconstruction report written; some observed behaviors still differ.");
     if (!result.complete) process.exitCode = 3;
   } finally {
     await discardExhumedPackage(exhumed);

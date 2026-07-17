@@ -20,3 +20,6 @@
 2026-07-17 — RESURRECT feeds at most 50 failed behavior records per revision, with each runner diagnostic capped at 1,200 characters, so model work orders remain bounded while preserving concrete expected and observed evidence.
 2026-07-17 — Characterization runs pass the rebuilt candidate a minimal platform environment rather than the parent process environment, so API keys and unrelated host secrets are not exposed to generated code.
 2026-07-17 — In automatic RESURRECT mode, an API generation failure switches the remaining rounds to an available Codex generator; an explicit `--engine` selection remains strict.
+2026-07-17 — REPORT caps OSV.dev queries at 10 seconds and writes `unknown, OSV unreachable` on any transport or response failure so reporting never blocks a reconstruction result.
+2026-07-17 — Graveyard reports mark a package REVIVED when at least 90% of recorded behaviors pass; this visual state is separate from, and never replaces, the explicit observed-behavior and coverage counts.
+2026-07-17 — REPORT compares the original resolved runtime dependency count from EXHUME with the rebuilt manifest’s declared runtime dependencies, and counts rebuilt LOC from authored TypeScript rather than dual-build output.
