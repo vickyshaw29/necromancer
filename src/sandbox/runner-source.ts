@@ -130,7 +130,35 @@ function serializeError(error) {
   return { name: "Error", message: String(error) };
 }
 
+function blockEscapeModules() {
+  const blockedNames = new Set(["child_process", "worker_threads", "vm", "module"]);
+  const isBlocked = (moduleName) => blockedNames.has(String(moduleName).replace(/^node:/, "").split("/")[0]);
+  const denied = (moduleName) => {
+    throw new Error("Process-control module " + JSON.stringify(moduleName) + " is disabled by the Necromancer child-process sandbox.");
+  };
+  try {
+    const module = require("node:module");
+    if (typeof module._load === "function") {
+      const originalLoad = module._load;
+      module._load = function (request, parent, isMain) {
+        if (isBlocked(request)) denied(request);
+        return originalLoad.call(this, request, parent, isMain);
+      };
+    }
+  } catch {}
+  try {
+    if (typeof process.getBuiltinModule === "function") {
+      const originalGetBuiltinModule = process.getBuiltinModule;
+      process.getBuiltinModule = function (moduleName) {
+        if (isBlocked(moduleName)) denied(moduleName);
+        return originalGetBuiltinModule.call(process, moduleName);
+      };
+    }
+  } catch {}
+}
+
 function disableNetwork() {
+  blockEscapeModules();
   const blocked = () => {
     throw new Error("Network access is disabled by the Necromancer child-process sandbox.");
   };
@@ -161,10 +189,12 @@ function disableNetwork() {
 }
 
 async function loadModule(packageName) {
+  const stagedDirectory = process.env.NECROMANCER_PACKAGE_PATH;
+  const packageTarget = stagedDirectory ? stagedDirectory + require("node:path").sep : packageName;
   try {
-    return require(packageName);
+    return require(packageTarget);
   } catch (error) {
-    if (error && error.code === "ERR_REQUIRE_ESM") return import(packageName);
+    if (error && error.code === "ERR_REQUIRE_ESM") return import(require.resolve(packageTarget));
     throw error;
   }
 }

@@ -10,6 +10,7 @@ const FILESYSTEM_MODULES = new Set(["fs"]);
 const NETWORK_MODULES = new Set(["http", "https", "http2", "net", "tls", "dgram", "dns", "cluster"]);
 const NETWORK_PACKAGES = new Set(["axios", "got", "node-fetch", "undici", "request", "superagent"]);
 const MODULE_REFERENCE = /(?:\b(?:require|import)\s*\(\s*|\b(?:from|import)\s+)["']([^"']+)["']/g;
+const NON_RUNTIME_DIRECTORIES = /^(test|tests|__tests__|spec|example|examples|benchmark|benchmarks|docs)$/i;
 
 export interface TriageOptions {
   runtimeDependencyCount?: number;
@@ -54,6 +55,12 @@ function normalizedModuleName(moduleName: string): string {
   return moduleName.replace(/^node:/, "").split("/")[0];
 }
 
+function isRuntimeSource(relativePath: string): boolean {
+  if (relativePath.endsWith(".d.ts")) return false;
+  if (!CODE_EXTENSIONS.has(path.extname(relativePath).toLowerCase())) return false;
+  return !relativePath.split("/").slice(0, -1).some((segment) => NON_RUNTIME_DIRECTORIES.test(segment));
+}
+
 /** Static, non-executing source scan for the v1 scope gate. */
 export async function triagePackage(packagePath: string, options: TriageOptions = {}): Promise<TriageResult> {
   const manifestPath = path.join(packagePath, "package.json");
@@ -74,7 +81,7 @@ export async function triagePackage(packagePath: string, options: TriageOptions 
     const relativePath = path.relative(packagePath, filePath).split(path.sep).join("/");
     if (relativePath.endsWith(".node")) nativeEvidence.push(relativePath);
     if (path.basename(relativePath) === "binding.gyp") nativeEvidence.push(relativePath);
-    if (!CODE_EXTENSIONS.has(path.extname(relativePath).toLowerCase())) continue;
+    if (!isRuntimeSource(relativePath)) continue;
 
     const source = await readFile(filePath, "utf8");
     loc += lineCount(source);

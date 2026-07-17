@@ -1,0 +1,8 @@
+{
+  "name": "lifecycle-package",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "prepare": "node prepare.js"
+  }
+}

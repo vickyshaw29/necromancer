@@ -1,6 +1,7 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { stagedRuntimeDependencyNames, stripStagedPackageScripts } from "../staging.js";
 
 const INSTALL_TIMEOUT_MS = 60_000;
 
@@ -38,27 +39,13 @@ async function installDependencies(packagePath: string): Promise<void> {
   });
 }
 
-function runtimeDependencyNames(value: unknown): string[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-  return Object.entries(value).flatMap(([name, version]) => (typeof version === "string" ? [name] : []));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-async function dependencyNames(packagePath: string): Promise<string[]> {
-  const parsed: unknown = JSON.parse(await readFile(path.join(packagePath, "package.json"), "utf8"));
-  if (!isRecord(parsed)) throw new Error("The staged package has an invalid package.json.");
-  return [...new Set([...runtimeDependencyNames(parsed.dependencies), ...runtimeDependencyNames(parsed.optionalDependencies)])];
-}
-
 export async function stageOriginalPackage(packagePath: string, artifactDirectory: string): Promise<string> {
   const destination = path.join(artifactDirectory, "original", "package");
   await mkdir(path.dirname(destination), { recursive: true });
   await rm(destination, { recursive: true, force: true });
   await cp(packagePath, destination, { recursive: true, force: true, verbatimSymlinks: true });
-  const runtimeDependencies = await dependencyNames(destination);
+  await stripStagedPackageScripts(destination);
+  const runtimeDependencies = await stagedRuntimeDependencyNames(destination);
   if (runtimeDependencies.length > 0) await installDependencies(destination);
   return destination;
 }

@@ -34,17 +34,26 @@ async function hasDistilledFiles(artifactDirectory: string): Promise<boolean> {
   return soul && test;
 }
 
-function osvSummary(report: ReportResult): string {
-  if (report.data.osv.status === "unknown") return "unknown, OSV unreachable";
-  return `${report.data.osv.cveCount ?? 0} CVE aliases across ${report.data.osv.advisoryCount ?? 0} OSV advisories`;
+function osvSummary(result: ReportResult["data"]["originalOsv"]): string {
+  if (result.status === "unknown") return "unknown, OSV unreachable";
+  return `${result.cveCount ?? 0} CVE aliases across ${result.advisoryCount ?? 0} OSV advisories`;
+}
+
+function rebuiltOsvSummary(report: ReportResult): string {
+  const { rebuiltOsv, after } = report.data;
+  if (rebuiltOsv.status === "unknown") return "unknown, OSV unreachable";
+  if ((rebuiltOsv.advisoryCount ?? 0) === 0) {
+    return `no advisories found across ${rebuiltOsv.scannedDependencyCount ?? after.runtimeDependencies} runtime dependencies`;
+  }
+  return osvSummary(rebuiltOsv);
 }
 
 function printReportSummary(report: ReportResult): void {
   const { artifact, resurrection, before, after } = report.data;
   const rows: Array<[string, string]> = [
     ["Observed fidelity", `${resurrection.passed} of ${resurrection.total} observed behaviors, ${artifact.coverage.branchCoverage.toFixed(2)}% branch coverage of the original`],
-    ["CVEs before", osvSummary(report)],
-    ["CVEs after", "0 known advisories; rebuilt package has 0 runtime dependencies"],
+    ["CVEs before", osvSummary(report.data.originalOsv)],
+    ["CVEs after", rebuiltOsvSummary(report)],
     ["Runtime dependencies", `${before.runtimeDependencies} → ${after.runtimeDependencies}`],
     ["Source LOC", `${before.loc.toLocaleString()} → ${after.loc.toLocaleString()}`],
     ["Graveyard report", report.reportPath]

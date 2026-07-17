@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { queryOsv } from "../src/report/index.js";
+import { queryOsv, queryOsvDependencies } from "../src/report/index.js";
 import { createReport } from "../src/report/stage.js";
 import type { ProbeArtifact } from "../src/distill/index.js";
 import type { ReportInput } from "../src/report/index.js";
@@ -47,6 +47,17 @@ describe("REPORT OSV client", () => {
 
     expect(result).toEqual({ status: "unknown", detail: "OSV unreachable" });
   });
+
+  it("scans declared rebuilt dependencies through the same query interface", async () => {
+    const calls: string[] = [];
+    const result = await queryOsvDependencies([{ name: "rebuilt-dependency", version: "1.2.3" }], async (name, version) => {
+      calls.push(`${name}@${version}`);
+      return { status: "known", advisoryCount: 0, cveCount: 0 };
+    });
+
+    expect(calls).toEqual(["rebuilt-dependency@1.2.3"]);
+    expect(result).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, scannedDependencyCount: 1 });
+  });
 });
 
 describe("graveyard HTML", () => {
@@ -84,7 +95,9 @@ describe("graveyard HTML", () => {
     expect(html).toContain("SOUL behavior clusters");
     expect(html).toContain("Original source");
     expect(html).toContain("Rebuilt source");
+    expect(html).toContain("no advisories found across 0 runtime dependencies");
     expect(html).toContain("REVIVED");
     expect(html).not.toMatch(/(?:src|href)=["']https?:/i);
+    expect(result.data.rebuiltOsv).toEqual({ status: "known", advisoryCount: 0, cveCount: 0, scannedDependencyCount: 0 });
   });
 });

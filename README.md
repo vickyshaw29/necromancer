@@ -45,7 +45,7 @@ Unsupported targets fail during EXHUME with the v1 scope and the observed reason
 
 ## Platforms and isolation
 
-Supported platforms are macOS, Linux, and Windows with Node 20+. Docker is optional and preferred for package invocation: dependencies install before invocation, then Docker runs with networking disabled. Without Docker, NECROMANCER uses a scrubbed child-process fallback and prints a reduced-isolation warning.
+Supported platforms are macOS, Linux, and Windows with Node 20+. Docker is optional: it isolates the bare package install and inspection step when available. Behavioral probing always uses the reduced-isolation child process because V8 coverage must write locally; that runner scrubs its environment and blocks common network and process-control modules, but it is not full containment. Run untrusted packages on a disposable machine or VM.
 
 ## How it works
 
@@ -55,7 +55,7 @@ EXHUME downloads the npm tarball directly from the registry and unpacks it into 
 
 ### 2. SANDBOX
 
-SANDBOX installs and invokes the target outside the NECROMANCER process. Docker is used when available; the child-process fallback keeps the target isolated as far as a portable Node process allows.
+SANDBOX stages the target outside the NECROMANCER process and removes copied lifecycle scripts before dependency installation. Docker currently isolates only the bare install and inspection step; behavioral probing runs in the reduced-isolation child process so c8 can collect V8 coverage. Treat that child process as a defensive compatibility runner, not a complete security boundary, and use a disposable machine or VM for untrusted packages.
 
 ### 3. PROBE
 

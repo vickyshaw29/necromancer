@@ -7,11 +7,21 @@ export interface OsvAdvisoryResult {
   advisoryCount?: number;
   cveCount?: number;
   detail?: string;
+  scannedDependencyCount?: number;
 }
 
 export interface SourceMetrics {
   loc: number;
   runtimeDependencies: number;
+}
+
+export interface DeclaredRuntimeDependency {
+  name: string;
+  version: string;
+}
+
+export interface RebuiltSourceMetrics extends SourceMetrics {
+  declaredRuntimeDependencies: DeclaredRuntimeDependency[];
 }
 
 export interface ReportInput {
@@ -29,8 +39,9 @@ export interface ReportData {
   artifact: ProbeArtifact;
   resurrection: ResurrectionResult;
   before: SourceMetrics;
-  after: SourceMetrics;
-  osv: OsvAdvisoryResult;
+  after: RebuiltSourceMetrics;
+  originalOsv: OsvAdvisoryResult;
+  rebuiltOsv: OsvAdvisoryResult;
   soul: string;
 }
 

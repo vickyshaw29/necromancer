@@ -1,14 +1,17 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { access, cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSandboxRunner, SandboxRunner } from "../src/sandbox/index.js";
 
 const fixturesPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const fixturePath = path.join(fixturesPath, "sandbox-edge-package");
 const activeRunners: SandboxRunner[] = [];
+const temporaryPaths: string[] = [];
 
 afterEach(async () => {
   await Promise.all(activeRunners.splice(0).map((runner) => runner.dispose()));
+  await Promise.all(temporaryPaths.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 async function childRunner(warnings: string[] = []): Promise<SandboxRunner> {
@@ -20,6 +23,22 @@ async function childRunner(warnings: string[] = []): Promise<SandboxRunner> {
   return runner;
 }
 
+async function lifecyclePackage(): Promise<{ packagePath: string; sentinelPath: string }> {
+  const cache = path.join(process.cwd(), ".necromancer-cache");
+  await mkdir(cache, { recursive: true });
+  const directory = await mkdtemp(path.join(cache, "lifecycle-test-"));
+  temporaryPaths.push(directory);
+  const packagePath = path.join(directory, "package");
+  const sentinelPath = path.join(directory, "host-lifecycle-sentinel");
+  await cp(path.join(fixturesPath, "lifecycle-package"), packagePath, { recursive: true, force: true });
+  await writeFile(
+    path.join(packagePath, "prepare.js"),
+    `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "unexpected lifecycle execution\\n");\n`,
+    "utf8"
+  );
+  return { packagePath, sentinelPath };
+}
+
 describe("SANDBOX RPC runner", () => {
   it("uses an explicit reduced-isolation child mode when Docker is disabled", async () => {
     const warnings: string[] = [];
@@ -27,7 +46,7 @@ describe("SANDBOX RPC runner", () => {
 
     expect(runner.mode).toBe("child");
     expect(warnings.join(" ")).toContain("reduced isolation mode");
-    expect(warnings.join(" ")).toContain("cannot guarantee network isolation");
+    expect(warnings.join(" ")).toContain("not full containment");
   });
 
   it("invokes a CommonJS package without loading it in the test process", async () => {
@@ -37,6 +56,17 @@ describe("SANDBOX RPC runner", () => {
 
     expect(result).toMatchObject({ ok: true, value: { kind: "ordinary" } });
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("removes copied lifecycle scripts before staging a linked package", async () => {
+    const source = await lifecyclePackage();
+    const runner = await createSandboxRunner(
+      { packagePath: source.packagePath, packageName: "lifecycle-package" },
+      { noDocker: true, onWarning: () => undefined }
+    );
+    activeRunners.push(runner);
+
+    await expect(access(source.sentinelPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.each([
@@ -73,6 +103,17 @@ describe("SANDBOX RPC runner", () => {
     expect(result).toMatchObject({
       ok: false,
       error: { name: "RangeError", message: "edge failure" }
+    });
+  });
+
+  it("blocks process-control modules from the probed package", async () => {
+    const runner = await childRunner();
+
+    const result = await runner.invoke("sandbox-edge-package", ["process-control"]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { name: "Error", message: expect.stringContaining("child_process") }
     });
   });
 });

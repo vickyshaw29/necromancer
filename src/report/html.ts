@@ -11,9 +11,17 @@ function clusterText(soul: string): string {
   return soul.slice(start, end < 0 ? undefined : end).trim();
 }
 
-function osvText(data: ReportData): string {
-  if (data.osv.status === "unknown") return "unknown, OSV unreachable";
-  return `${data.osv.cveCount ?? 0} CVE aliases across ${data.osv.advisoryCount ?? 0} OSV advisories`;
+function osvText(result: ReportData["originalOsv"]): string {
+  if (result.status === "unknown") return "unknown, OSV unreachable";
+  return `${result.cveCount ?? 0} CVE aliases across ${result.advisoryCount ?? 0} OSV advisories`;
+}
+
+function rebuiltOsvText(data: ReportData): string {
+  if (data.rebuiltOsv.status === "unknown") return "unknown, OSV unreachable";
+  if ((data.rebuiltOsv.advisoryCount ?? 0) === 0) {
+    return `no advisories found across ${data.rebuiltOsv.scannedDependencyCount ?? data.after.runtimeDependencies} runtime dependencies`;
+  }
+  return osvText(data.rebuiltOsv);
 }
 
 export function renderGraveyard(data: ReportData): string {
@@ -53,8 +61,8 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #d9dee8; 
   <section class="grid">
     <article class="panel"><div class="label">Original branch coverage</div><div class="value">${data.artifact.coverage.branchCoverage.toFixed(2)}%</div></article>
     <article class="panel"><div class="label">Rebuild rounds</div><div class="value">${data.resurrection.rounds.length}</div></article>
-    <article class="panel"><div class="label">CVEs / OSV before</div><div class="value ${data.osv.status === "unknown" ? "warning" : ""}">${escapeHtml(osvText(data))}</div></article>
-    <article class="panel"><div class="label">CVEs / OSV after</div><div class="value after">0 known advisories; 0 runtime dependencies</div></article>
+    <article class="panel"><div class="label">CVEs / OSV before</div><div class="value ${data.originalOsv.status === "unknown" ? "warning" : ""}">${escapeHtml(osvText(data.originalOsv))}</div></article>
+    <article class="panel"><div class="label">CVEs / OSV after</div><div class="value ${data.rebuiltOsv.status === "unknown" ? "warning" : "after"}">${escapeHtml(rebuiltOsvText(data))}</div></article>
   </section>
 
   <h2>Source comparison</h2>

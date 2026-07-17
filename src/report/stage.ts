@@ -3,8 +3,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { renderGraveyard } from "./html.js";
 import { rebuiltMetrics } from "./metrics.js";
-import { queryOsv } from "./osv.js";
-import { OsvAdvisoryResult, ReportData, ReportInput, ReportResult } from "./types.js";
+import { OsvQuery, queryOsv, queryOsvDependencies } from "./osv.js";
+import { ReportData, ReportInput, ReportResult } from "./types.js";
 
 const MAX_SOUL_CHARS = 96_000;
 
@@ -23,16 +23,18 @@ async function readSoul(filePath: string): Promise<string> {
 }
 
 export interface ReportOptions {
-  osvQuery?: (packageName: string, version: string) => Promise<OsvAdvisoryResult>;
+  osvQuery?: OsvQuery;
 }
 
 export async function createReport(input: ReportInput, options: ReportOptions = {}): Promise<ReportResult> {
   const rebuiltDirectory = path.join(input.artifactDirectory, "rebuilt");
-  const [after, soul, osv] = await Promise.all([
+  const query = options.osvQuery ?? queryOsv;
+  const [after, soul, originalOsv] = await Promise.all([
     rebuiltMetrics(rebuiltDirectory),
     readSoul(path.join(input.artifactDirectory, "SOUL.md")),
-    (options.osvQuery ?? queryOsv)(input.packageName, input.version)
+    query(input.packageName, input.version)
   ]);
+  const rebuiltOsv = await queryOsvDependencies(after.declaredRuntimeDependencies, query);
   const data: ReportData = {
     packageName: input.packageName,
     version: input.version,
@@ -40,7 +42,8 @@ export async function createReport(input: ReportInput, options: ReportOptions = 
     resurrection: input.resurrection,
     before: { loc: input.triage.loc, runtimeDependencies: input.triage.runtimeDependencyCount },
     after,
-    osv,
+    originalOsv,
+    rebuiltOsv,
     soul
   };
   await mkdir(input.artifactDirectory, { recursive: true });

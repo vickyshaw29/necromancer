@@ -11,6 +11,7 @@ module.exports = function edgeValue(kind) {
     return value;
   }
   if (kind === "throw") throw new RangeError("edge failure");
+  if (kind === "process-control") return require("node:child_process").spawn;
   return { kind };
 };
 

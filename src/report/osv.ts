@@ -1,4 +1,4 @@
-import { OsvAdvisoryResult } from "./types.js";
+import { DeclaredRuntimeDependency, OsvAdvisoryResult } from "./types.js";
 
 const OSV_QUERY_URL = "https://api.osv.dev/v1/query";
 
@@ -32,4 +32,22 @@ export async function queryOsv(packageName: string, version: string, request: ty
   } catch {
     return { status: "unknown", detail: "OSV unreachable" };
   }
+}
+
+export type OsvQuery = (packageName: string, version: string) => Promise<OsvAdvisoryResult>;
+
+export async function queryOsvDependencies(
+  dependencies: DeclaredRuntimeDependency[],
+  query: OsvQuery = queryOsv
+): Promise<OsvAdvisoryResult> {
+  const results = await Promise.all(dependencies.map(({ name, version }) => query(name, version)));
+  if (results.some((result) => result.status === "unknown")) {
+    return { status: "unknown", detail: "OSV unreachable", scannedDependencyCount: dependencies.length };
+  }
+  return {
+    status: "known",
+    advisoryCount: results.reduce((count, result) => count + (result.advisoryCount ?? 0), 0),
+    cveCount: results.reduce((count, result) => count + (result.cveCount ?? 0), 0),
+    scannedDependencyCount: dependencies.length
+  };
 }

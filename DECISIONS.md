@@ -23,3 +23,7 @@
 2026-07-17 — REPORT caps OSV.dev queries at 10 seconds and writes `unknown, OSV unreachable` on any transport or response failure so reporting never blocks a reconstruction result.
 2026-07-17 — Graveyard reports mark a package REVIVED when at least 90% of recorded behaviors pass; this visual state is separate from, and never replaces, the explicit observed-behavior and coverage counts.
 2026-07-17 — REPORT compares the original resolved runtime dependency count from EXHUME with the rebuilt manifest’s declared runtime dependencies, and counts rebuilt LOC from authored TypeScript rather than dual-build output.
+2026-07-17 — Every copied target manifest has its entire `scripts` field and its non-runtime `devDependencies` removed before staging; runtime dependencies alone are installed when present, while `--ignore-scripts` remains defense in depth against lifecycle execution.
+2026-07-17 — V8 coverage keeps behavioral probing in the reduced-isolation child runner; Docker is described only as isolation for the bare install and inspection step, and the runner blocks network plus process-control module loads without claiming full containment.
+2026-07-17 — REPORT scans rebuilt declared runtime dependencies through the same OSV query path as the original; an empty declaration produces the measured result “no advisories found across 0 runtime dependencies.”
+2026-07-17 — EXHUME retains native-module evidence from all tarball files but excludes test, example, benchmark, documentation directories and `.d.ts` files from runtime LOC and I/O scope markers.

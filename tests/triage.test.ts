@@ -1,11 +1,17 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, it } from "vitest";
 import { triagePackage } from "../src/exhume/triage.js";
 import { parsePackageSpec } from "../src/exhume/registry.js";
 
 const fixturesPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const fixture = (name: string): string => path.join(fixturesPath, name);
+const temporaryPaths: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryPaths.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
 
 describe("static triage", () => {
   it("parses regular and scoped package specifiers", () => {
@@ -58,5 +64,19 @@ describe("static triage", () => {
     expect(result.reasons.map((reason) => reason.code)).toEqual(
       expect.arrayContaining(["TOO_MANY_RUNTIME_DEPENDENCIES", "TOO_MANY_LINES"])
     );
+  });
+
+  it("ignores non-runtime tests and declaration files during static scope checks", async () => {
+    const cache = path.join(process.cwd(), ".necromancer-cache");
+    await mkdir(cache, { recursive: true });
+    const packagePath = await mkdtemp(path.join(cache, "triage-non-runtime-"));
+    temporaryPaths.push(packagePath);
+    await cp(fixture("non-runtime-files-package"), packagePath, { recursive: true, force: true });
+    await writeFile(path.join(packagePath, "index.d.ts"), "export declare const value: string;\n".repeat(2_100), "utf8");
+
+    const result = await triagePackage(packagePath);
+
+    expect(result).toMatchObject({ verdict: "IN_SCOPE", filesystemImports: [] });
+    expect(result.loc).toBeLessThan(10);
   });
 });

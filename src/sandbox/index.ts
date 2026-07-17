@@ -1,6 +1,7 @@
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { stagedRuntimeDependencyNames, stripStagedPackageScripts } from "../staging.js";
 import { parseSurface, serializeRequest } from "./protocol.js";
 import { RUNNER_SOURCE } from "./runner-source.js";
 import {
@@ -76,6 +77,7 @@ function childEnvironment(root: string, coverageDirectory?: string): NodeJS.Proc
     http_proxy: "",
     https_proxy: "",
     all_proxy: "",
+    NECROMANCER_PACKAGE_PATH: path.join(root, "package"),
     ...(coverageDirectory ? { NODE_V8_COVERAGE: coverageDirectory } : {})
   };
 }
@@ -212,12 +214,13 @@ async function prepareWorkspace(source: SandboxSource): Promise<string> {
   const packagePath = path.join(root, "package");
   try {
     await cp(source.packagePath, packagePath, { recursive: true, force: true, verbatimSymlinks: true });
+    await stripStagedPackageScripts(packagePath);
     await Promise.all([
       mkdir(path.join(root, ".home"), { recursive: true }),
       mkdir(path.join(root, ".tmp"), { recursive: true }),
       writeFile(
         path.join(root, "package.json"),
-        `${JSON.stringify({ private: true, type: "commonjs", dependencies: { [source.packageName]: "file:./package" } }, null, 2)}\n`,
+        `${JSON.stringify({ private: true, type: "commonjs" }, null, 2)}\n`,
         "utf8"
       ),
       writeFile(path.join(root, "runner.cjs"), RUNNER_SOURCE, "utf8")
@@ -231,7 +234,7 @@ async function prepareWorkspace(source: SandboxSource): Promise<string> {
 
 async function installWithChild(root: string): Promise<void> {
   await runCommand(npmCommand(), ["install", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund", "--package-lock=false"], {
-    cwd: root,
+    cwd: path.join(root, "package"),
     env: installationEnvironment(root),
     timeoutMs: 60_000
   });
@@ -248,7 +251,7 @@ async function installWithDocker(root: string, env: NodeJS.ProcessEnv): Promise<
       "-v",
       dockerMount(root),
       "-w",
-      "/work",
+      "/work/package",
       "-e",
       "npm_config_cache=/tmp/npm-cache",
       "-e",
@@ -307,6 +310,8 @@ class Runner implements SandboxRunner {
               dockerMount(this.root, true),
               "-w",
               "/work",
+              "-e",
+              "NECROMANCER_PACKAGE_PATH=/work/package",
               DOCKER_IMAGE,
               "node",
               "runner.cjs"
@@ -361,26 +366,29 @@ export async function createSandboxRunner(source: SandboxSource, options: Sandbo
   let dockerEnv: NodeJS.ProcessEnv | undefined;
 
   try {
+    const needsInstall = (await stagedRuntimeDependencyNames(path.join(root, "package"))).length > 0;
     if (options.coverageDirectory) {
       await mkdir(options.coverageDirectory, { recursive: true });
-      warn("[SANDBOX] PROBE coverage uses reduced-isolation child-process instrumentation so c8 can collect original branch coverage.");
-      await installWithChild(root);
+      warn(
+        "[SANDBOX] Behavioral probing uses reduced-isolation child-process mode because V8 coverage must write locally. Docker currently isolates only the bare install/inspection step. The child runner is not full containment; run untrusted packages on a disposable machine or VM."
+      );
+      if (needsInstall) await installWithChild(root);
     } else if (!options.noDocker && (await dockerAvailable())) {
       try {
         dockerEnv = await dockerEnvironment(root);
-        await installWithDocker(root, dockerEnv);
+        if (needsInstall) await installWithDocker(root, dockerEnv);
         mode = "docker";
       } catch (error) {
         const detail = error instanceof Error ? error.message : "unknown Docker error";
         warn(`[SANDBOX] Docker setup failed; using reduced isolation child-process mode. ${detail}`);
-        await installWithChild(root);
+        if (needsInstall) await installWithChild(root);
       }
     } else {
       const reason = options.noDocker ? "--no-docker was requested" : "Docker is unavailable";
       warn(
-        `[SANDBOX] Warning: reduced isolation mode (${reason}). The child runner scrubs its environment and blocks common Node network APIs, but cannot guarantee network isolation.`
+        `[SANDBOX] Warning: reduced isolation mode (${reason}). The child runner scrubs its environment and blocks common network and process-control modules, but is not full containment. Run untrusted packages on a disposable machine or VM.`
       );
-      await installWithChild(root);
+      if (needsInstall) await installWithChild(root);
     }
     return new Runner(mode, root, source, timeoutMs, dockerEnv, options.coverageDirectory);
   } catch (error) {
