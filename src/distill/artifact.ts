@@ -1,8 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { isRecord } from "../json.js";
-import { CoverageSummary, ProbeBehavior } from "../probe/index.js";
+import { ArgumentShapeCoverage, CoverageSummary, ProbeBehavior } from "../probe/index.js";
 import { ModuleSurface } from "../sandbox/index.js";
 import { ProbeArtifact } from "./types.js";
+
+const MAX_PROBE_ARTIFACT_BYTES = 4 * 1024 * 1024;
 
 function isBehavior(value: unknown): value is ProbeBehavior {
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.fn !== "string" || !Array.isArray(value.args)) return false;
@@ -27,11 +29,24 @@ function isSurface(value: unknown): value is ModuleSurface {
   });
 }
 
+function isArgumentShapeCoverage(value: unknown): value is ArgumentShapeCoverage {
+  if (!isRecord(value) || typeof value.fn !== "string" || typeof value.complete !== "boolean") return false;
+  const required = value.requiredArgumentCounts;
+  const observed = value.observedArgumentCounts;
+  return (
+    Array.isArray(required) &&
+    Array.isArray(observed) &&
+    required.every((count) => Number.isSafeInteger(count) && count >= 0) &&
+    observed.every((count) => Number.isSafeInteger(count) && count >= 0)
+  );
+}
+
 export function parseProbeArtifact(value: unknown): ProbeArtifact {
   if (
     !isRecord(value) ||
     typeof value.packageName !== "string" ||
     (value.version !== undefined && typeof value.version !== "string") ||
+    (value.sourceTarballSha512 !== undefined && typeof value.sourceTarballSha512 !== "string") ||
     !Array.isArray(value.behaviors) ||
     !isCoverage(value.coverage)
   ) {
@@ -39,15 +54,30 @@ export function parseProbeArtifact(value: unknown): ProbeArtifact {
   }
   const behaviors = value.behaviors.filter(isBehavior);
   if (behaviors.length !== value.behaviors.length) throw new Error("behaviors.json contains an invalid behavior record.");
+  const heldOut = value.heldOutBehaviors;
+  if (heldOut !== undefined && (!Array.isArray(heldOut) || !heldOut.every(isBehavior))) {
+    throw new Error("behaviors.json contains an invalid Last Rites behavior record.");
+  }
+  const argumentShapeCoverage = value.argumentShapeCoverage;
+  if (argumentShapeCoverage !== undefined && (!Array.isArray(argumentShapeCoverage) || !argumentShapeCoverage.every(isArgumentShapeCoverage))) {
+    throw new Error("behaviors.json contains invalid argument-shape coverage.");
+  }
   return {
     packageName: value.packageName,
     ...(typeof value.version === "string" ? { version: value.version } : {}),
+    ...(typeof value.sourceTarballSha512 === "string" ? { sourceTarballSha512: value.sourceTarballSha512 } : {}),
     behaviors,
+    ...(heldOut ? { heldOutBehaviors: heldOut } : {}),
+    ...(argumentShapeCoverage ? { argumentShapeCoverage } : {}),
     coverage: value.coverage,
     ...(isSurface(value.surface) ? { surface: value.surface } : {})
   };
 }
 
 export async function readProbeArtifact(artifactPath: string): Promise<ProbeArtifact> {
+  const details = await stat(artifactPath);
+  if (!details.isFile() || details.size > MAX_PROBE_ARTIFACT_BYTES) {
+    throw new Error("behaviors.json exceeds Necromancer's 4 MB artifact safety limit.");
+  }
   return parseProbeArtifact(JSON.parse(await readFile(artifactPath, "utf8")));
 }

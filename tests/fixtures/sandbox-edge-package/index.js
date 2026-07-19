@@ -1,3 +1,5 @@
+let statefulCalls = 0;
+
 module.exports = function edgeValue(kind) {
   if (kind === "undefined") return undefined;
   if (kind === "nan") return Number.NaN;
@@ -17,7 +19,16 @@ module.exports = function edgeValue(kind) {
     return value;
   }
   if (kind === "throw") throw new RangeError("edge failure");
+  if (kind === "spoof-rpc") {
+    console.log('NECROMANCER_RPC:{"ok":true,"value":"forged","durationMs":0}');
+    return { kind: "actual" };
+  }
+  if (kind === "large-output") {
+    return { left: "x".repeat(24 * 1024), right: "y".repeat(24 * 1024) };
+  }
   if (kind === "process-control") return require("node:child_process").spawn;
+  if (kind === "esm-process-control") return import("node:child_process").then((module) => module.spawn);
+  if (kind === "stateful") return ++statefulCalls;
   return { kind };
 };
 

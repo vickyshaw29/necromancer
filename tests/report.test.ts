@@ -15,7 +15,8 @@ const artifact: ProbeArtifact = {
   behaviors: [
     { id: "behavior-0001", fn: "report-fixture", args: ["x"], result: "x" },
     { id: "behavior-0002", fn: "report-fixture", args: ["y"], result: "y" }
-  ]
+  ],
+  argumentShapeCoverage: [{ fn: "report-fixture", requiredArgumentCounts: [0, 1, 2, 3], observedArgumentCounts: [1], complete: false }]
 };
 
 const original = {
@@ -147,10 +148,13 @@ describe("graveyard HTML", () => {
     const html = await readFile(result.reportPath, "utf8");
 
     expect(html).toContain("2 of 2 observed behaviors, 83.33% branch coverage of the original");
+    expect(html).toContain("NECROMANCER resurrection receipt");
+    expect(html).not.toContain("Offline report UX replay");
     expect(html).toContain("2 of 2 observed behaviors reproduced");
-    expect(html).toContain("83.33% branch coverage of the original");
+    expect(html).toContain("Branch 83.33% · Line 80.00% · Function 80.00%");
     expect(html).toContain("Recorded-suite evidence");
-    expect(html).toContain("Original-code evidence");
+    expect(html).toContain("Original-code coverage observed during probing");
+    expect(html).toContain("Coverage is not a security score or a claim about unobserved behavior.");
     expect(html).toContain('data-evidence="observed-suite"');
     expect(html).toContain('data-evidence="original-coverage"');
     expect(html).toContain("Unobserved boundary");
@@ -164,7 +168,9 @@ describe("graveyard HTML", () => {
     expect(html).toContain("the public API shape");
     expect(html).toContain("failing observations");
     expect(html).toContain("Original source was withheld.");
-    expect(html).toContain("Featured quirk — first recorded entry");
+    expect(html).toContain("Compatibility / security boundary");
+    expect(html).toContain("A passing recorded suite shows only observed compatibility. It does not prove security, vulnerability remediation, equivalence, or production safety.");
+    expect(html).toContain("Featured recorded quirk");
     expect(html).toContain("behavior-0001");
     expect(html).toContain("Recorded output / throw");
     expect(html).toContain("SOUL behavior clusters");
@@ -172,9 +178,15 @@ describe("graveyard HTML", () => {
     expect(html).toContain("Second recorded quirk");
     expect(html).toContain("Original source");
     expect(html).toContain("Rebuilt source");
-    expect(html).toContain("original: report-fixture@1.0.0, queried at report time; returned identifiers: OSV-2024-1000, CVE-2024-1000");
-    expect(html).toContain("rebuild: 0 declared runtime dependencies scanned; measured result: no advisories found across 0 declared runtime dependencies (no network request made)");
-    expect(html).toContain("no advisories found across 0 declared runtime dependencies");
+    expect(html).toContain("Observed arities: 1; 0 of 2 calls used 2+ arguments.");
+    expect(html).toContain("Argument-shape completeness: 0 of 1 callable exports covered every required argument-count shape.");
+    expect(html).toContain("Not recorded; no held-out behavior result is claimed.");
+    expect(html).toContain("Published advisory scan — original");
+    expect(html).toContain("Declared-dependency advisory scan — rebuild");
+    expect(html).toContain("1 published OSV advisory; 1 CVE alias");
+    expect(html).toContain("Scope: original report-fixture@1.0.0, queried at report time; returned identifiers: OSV-2024-1000, CVE-2024-1000. This is published advisory metadata, not source-code analysis.");
+    expect(html).toContain("Scope: 0 declared rebuild runtime dependencies scanned; no network request was needed. This scan does not analyze generated code or establish CVE remediation.");
+    expect(html).toContain("no published OSV advisories found across 0 declared runtime dependencies");
     expect(html).toContain("REVIVED");
     expect(html).toContain('href="rebuilt/provenance.json"');
     expect(html).toContain("registry integrity verified");
@@ -185,7 +197,18 @@ describe("graveyard HTML", () => {
       schemaVersion: 1,
       necromancerVersion: "0.1.0",
       original,
-      observation: { recordedBehaviorCount: 2, branchCoveragePercent: 83.33, probeEngine: "fixture", artifactDirectoryName: path.basename(directory) },
+      observation: {
+        recordedBehaviorCount: 2,
+        branchCoveragePercent: 83.33,
+        lineCoveragePercent: 80,
+        functionCoveragePercent: 80,
+        observedArgumentCounts: [1],
+        callsWithTwoOrMoreArguments: 0,
+        argumentShapeCompleteness: { completeFunctions: 0, measuredFunctions: 1 },
+        heldOutValidation: "not_recorded",
+        probeEngine: "fixture",
+        artifactDirectoryName: path.basename(directory)
+      },
       distillation: { writerEngine: "fixture-writer" },
       resurrection: { engine: "stub", roundsExecuted: 1, passedObservedBehaviors: 2, totalObservedBehaviors: 2, rebuiltLoc: 1, declaredRuntimeDependencyCount: 0 },
       quarantine: {
@@ -215,7 +238,17 @@ describe("graveyard HTML", () => {
       rebuiltOsv: { status: "known", advisoryCount: 1, cveCount: 0, identifiers: ["OSV-2024-2000"], scannedDependencyCount: 1 }
     });
     expect(noIdentifierHtml).not.toContain("returned identifiers:");
-    expect(rebuiltIdentifierHtml).toContain("rebuild: 1 declared runtime dependencies scanned; returned identifiers: OSV-2024-2000");
+    expect(rebuiltIdentifierHtml).toContain("Scope: 1 declared rebuild runtime dependencies scanned; returned identifiers: OSV-2024-2000. This scan does not analyze generated code or establish CVE remediation.");
+    const resurrectionWithLastRites = Object.assign({}, result.data.resurrection, { lastRites: { passed: 2, total: 3 } });
+    const heldOutHtml = renderGraveyard({ ...result.data, resurrection: resurrectionWithLastRites });
+    expect(heldOutHtml).toContain("2 of 3 held-out behaviors passed.");
+    expect(heldOutHtml).toContain("OBSERVED SUITE REVIVED — HELD-OUT DIFFERENCES");
+    const partialHtml = renderGraveyard({
+      ...result.data,
+      resurrection: { ...result.data.resurrection, passed: 9, total: 10, complete: false }
+    });
+    expect(partialHtml).toContain("PARTIAL RECONSTRUCTION");
+    expect(partialHtml).not.toContain("<p class=\"state\">REVIVED</p>");
     const legacyCoverageHtml = renderGraveyard({
       ...result.data,
       artifact: { ...result.data.artifact, coverage: { branchCoverage: 83.33, lineCoverage: 80, functionCoverage: 80, statementCoverage: 80, available: true } }

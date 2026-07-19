@@ -59,6 +59,11 @@ export interface ResurrectionRound {
   failedIds: string[];
 }
 
+export interface LastRitesResult {
+  passed: number;
+  total: number;
+}
+
 export type ResurrectionEvent =
   | { type: "engine-selected"; engine: string }
   | { type: "round-start"; round: number; maxRounds: number }
@@ -76,6 +81,7 @@ export interface ResurrectionResult {
   passed: number;
   total: number;
   complete: boolean;
+  lastRites?: LastRitesResult;
   resultPath: string;
 }
 

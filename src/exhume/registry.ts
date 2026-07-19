@@ -1,9 +1,13 @@
 import { createHash, getHashes, timingSafeEqual } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { open, rm } from "node:fs/promises";
+import { Readable } from "node:stream";
 import { NpmPackageManifest, PackageSpec, RegistryIntegrityMatch } from "./types.js";
 
 const REGISTRY_URL = "https://registry.npmjs.org";
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_TARBALL_BYTES = 50 * 1024 * 1024;
+const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 
 interface RegistryDocument {
   "dist-tags"?: Record<string, string>;
@@ -11,8 +15,9 @@ interface RegistryDocument {
 }
 
 export interface TarballDownload {
-  archive: Buffer;
+  archivePath: string;
   sha512: string;
+  byteLength: number;
 }
 
 function registryPackageUrl(name: string): string {
@@ -39,6 +44,32 @@ async function request(url: string): Promise<Response> {
     }
     if (error instanceof Error) throw error;
     throw new Error("Unable to contact the npm registry.");
+  }
+}
+
+async function registryJson(response: Response): Promise<unknown> {
+  const contentLength = response.headers.get("content-length");
+  const advertisedSize = contentLength ? Number(contentLength) : undefined;
+  if (advertisedSize !== undefined && Number.isFinite(advertisedSize) && advertisedSize > MAX_MANIFEST_BYTES) {
+    throw new Error("The npm registry document exceeds Necromancer's 8 MB safety limit.");
+  }
+  if (!response.body) throw new Error("npm returned an empty registry document.");
+
+  let received = 0;
+  const chunks: Buffer[] = [];
+  for await (const value of Readable.fromWeb(response.body)) {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    received += chunk.byteLength;
+    if (received > MAX_MANIFEST_BYTES) {
+      await response.body.cancel().catch(() => undefined);
+      throw new Error("The npm registry document exceeds Necromancer's 8 MB safety limit.");
+    }
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks, received).toString("utf8"));
+  } catch {
+    throw new Error("npm returned an invalid registry document.");
   }
 }
 
@@ -125,7 +156,7 @@ function highestVersionMatching(versions: string[], range: string): string | und
 
 export async function fetchPackageManifest(spec: PackageSpec): Promise<NpmPackageManifest> {
   const response = await request(registryPackageUrl(spec.name));
-  const document = (await response.json()) as RegistryDocument;
+  const document = (await registryJson(response)) as RegistryDocument;
   const versions = document.versions ?? {};
   const selector = spec.requestedVersion ?? "latest";
   const selectedVersion =
@@ -142,7 +173,7 @@ export async function fetchPackageManifest(spec: PackageSpec): Promise<NpmPackag
   return manifest;
 }
 
-export async function downloadTarballReceipt(tarballUrl: string): Promise<TarballDownload> {
+export async function downloadTarballReceipt(tarballUrl: string, archivePath: string): Promise<TarballDownload> {
   let parsed: URL;
   try {
     parsed = new URL(tarballUrl);
@@ -159,23 +190,30 @@ export async function downloadTarballReceipt(tarballUrl: string): Promise<Tarbal
   }
   if (!response.body) throw new Error("npm returned an empty tarball response.");
 
-  const reader = response.body.getReader();
-  const chunks: Buffer[] = [];
   const sha512 = createHash("sha512");
   let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_TARBALL_BYTES) {
-      await reader.cancel();
-      throw new Error("The npm tarball exceeds Necromancer's 50 MB safety limit.");
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(archivePath, "wx");
+    for await (const value of Readable.fromWeb(response.body)) {
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+      total += chunk.byteLength;
+      if (total > MAX_TARBALL_BYTES) {
+        throw new Error("The npm tarball exceeds Necromancer's 50 MB safety limit.");
+      }
+      sha512.update(chunk);
+      await handle.write(chunk);
     }
-    const chunk = Buffer.from(value);
-    sha512.update(chunk);
-    chunks.push(chunk);
+    return { archivePath, sha512: `sha512-${sha512.digest("base64")}`, byteLength: total };
+  } catch (error) {
+    await handle?.close();
+    handle = undefined;
+    await response.body.cancel().catch(() => undefined);
+    await rm(archivePath, { force: true });
+    throw error;
+  } finally {
+    await handle?.close();
   }
-  return { archive: Buffer.concat(chunks, total), sha512: `sha512-${sha512.digest("base64")}` };
 }
 
 function sameDigest(left: Buffer, right: Buffer): boolean {
@@ -195,6 +233,43 @@ function integrityFromSsri(archive: Buffer, integrity: string): boolean | undefi
     if (sameDigest(actual, expected)) return true;
   }
   return compared ? false : undefined;
+}
+
+interface IntegrityToken {
+  algorithm: string;
+  expected: Buffer;
+}
+
+function integrityTokens(integrity: string): IntegrityToken[] {
+  const tokens: IntegrityToken[] = [];
+  for (const token of integrity.trim().split(/\s+/)) {
+    const match = /^([A-Za-z0-9]+)-([A-Za-z0-9+/=]+)(?:\?.*)?$/.exec(token);
+    if (!match) continue;
+    const algorithm = match[1].toLowerCase();
+    if (!getHashes().includes(algorithm)) continue;
+    tokens.push({ algorithm, expected: Buffer.from(match[2], "base64") });
+  }
+  return tokens;
+}
+
+async function hashesForFile(filePath: string, algorithms: string[]): Promise<Map<string, Buffer>> {
+  const hashes = new Map(algorithms.map((algorithm) => [algorithm, createHash(algorithm)]));
+  for await (const chunk of createReadStream(filePath)) {
+    for (const hash of hashes.values()) hash.update(chunk);
+  }
+  return new Map([...hashes].map(([algorithm, hash]) => [algorithm, hash.digest()]));
+}
+
+export async function registryFileIntegrityMatch(filePath: string, dist: NpmPackageManifest["dist"]): Promise<RegistryIntegrityMatch> {
+  if (dist?.integrity) {
+    const tokens = integrityTokens(dist.integrity);
+    if (tokens.length === 0) return "unknown";
+    const hashes = await hashesForFile(filePath, [...new Set(tokens.map((token) => token.algorithm))]);
+    return tokens.some((token) => sameDigest(hashes.get(token.algorithm) as Buffer, token.expected)) ? "verified" : "mismatch";
+  }
+  if (!dist?.shasum || !/^[a-fA-F0-9]{40}$/.test(dist.shasum)) return "unknown";
+  const actual = (await hashesForFile(filePath, ["sha1"])).get("sha1") as Buffer;
+  return actual.toString("hex").toLowerCase() === dist.shasum.toLowerCase() ? "verified" : "mismatch";
 }
 
 export function registryIntegrityMatch(archive: Buffer, dist: NpmPackageManifest["dist"]): RegistryIntegrityMatch {

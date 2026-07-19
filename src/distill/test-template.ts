@@ -47,8 +47,10 @@ function exactTag(record: Record<string, unknown>, kind: string, keys: string[])
 }
 
 function reviveRecord(record: Record<string, unknown>): Record<string, unknown> {
-  const output: Record<string, unknown> = Object.create(null);
-  for (const [key, item] of Object.entries(record)) output[key] = revive(item);
+  const output: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(record)) {
+    Object.defineProperty(output, key, { value: revive(item), enumerable: true, configurable: true, writable: true });
+  }
   return output;
 }
 

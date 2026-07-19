@@ -1,7 +1,7 @@
 import { cp, mkdir, rm, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
 import path from "node:path";
-import { stagedRuntimeDependencyNames, stripStagedPackageScripts } from "../staging.js";
+import { processFailure, runProcess } from "../process.js";
+import { stagedInstallEnvironment, stagedRuntimeDependencyNames, stripStagedPackageScripts } from "../staging.js";
 
 const INSTALL_TIMEOUT_MS = 60_000;
 
@@ -10,33 +10,14 @@ function npmCommand(): string {
 }
 
 async function installDependencies(packagePath: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(npmCommand(), ["install", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund", "--package-lock=false"], {
-      cwd: packagePath,
-      stdio: ["ignore", "ignore", "pipe"],
-      windowsHide: true
-    });
-    let settled = false;
-    let stderr = "";
-    const finish = (callback: () => void): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      callback();
-    };
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(() => reject(new Error(`Staged runtime dependency install exceeded its ${INSTALL_TIMEOUT_MS} ms limit.`)));
-    }, INSTALL_TIMEOUT_MS);
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (stderr.length < 500) stderr += chunk.toString("utf8").slice(0, 500 - stderr.length);
-    });
-    child.on("error", (error) => finish(() => reject(error)));
-    child.on("close", (code) => {
-      if (code === 0) finish(resolve);
-      else finish(() => reject(new Error(`Could not install staged runtime dependencies: ${stderr.trim() || "no error output"}`)));
-    });
+  const env = await stagedInstallEnvironment(packagePath);
+  const result = await runProcess(npmCommand(), ["install", "--ignore-scripts=true", "--omit=dev", "--no-audit", "--no-fund", "--package-lock=false"], {
+    cwd: packagePath,
+    env,
+    timeoutMs: INSTALL_TIMEOUT_MS,
+    maxOutputChars: 500
   });
+  if (result.code !== 0) throw processFailure("Could not install staged runtime dependencies", result);
 }
 
 export async function stageOriginalPackage(packagePath: string, artifactDirectory: string): Promise<string> {

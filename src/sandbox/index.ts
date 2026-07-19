@@ -1,41 +1,34 @@
-import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { stagedRuntimeDependencyNames, stripStagedPackageScripts } from "../staging.js";
 import { parseSurface, serializeRequest } from "./protocol.js";
-import { RUNNER_SOURCE } from "./runner-source.js";
+import { SandboxProcessError, runSandboxCommand } from "./command.js";
+import { dockerAvailable, dockerClientEnvironment, dockerMount, dockerSafetyArgs, dockerUserArgs, DOCKER_IMAGE } from "./docker.js";
+import { childEnvironment, installWithChild, installWithDocker, packageNeedsInstall, prepareWorkspace } from "./workspace.js";
 import {
   InvocationResult,
   ModuleSurface,
   RunnerMode,
+  SandboxInvocation,
   SandboxOptions,
   SandboxRunner,
   SandboxSource
 } from "./types.js";
 
 export * from "./types.js";
+export { SandboxProcessError } from "./command.js";
 
-const DOCKER_IMAGE = "node:20-slim";
-const RPC_PREFIX = "NECROMANCER_RPC:";
 const DEFAULT_TIMEOUT_MS = 10_000;
-const MAX_PROCESS_OUTPUT_BYTES = 1_000_000;
+const MAX_REQUEST_BYTES = 256 * 1024;
+const MAX_BATCH_INVOCATIONS = 8;
+const MAX_BATCH_TIMEOUT_MS = 180_000;
+const RPC_PREFIX = "NECROMANCER_RPC:";
+const BATCH_PREFIX = "NECROMANCER_BATCH:";
 
-interface CommandOptions {
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  input?: string;
-  timeoutMs: number;
-}
-
-interface CommandResult {
-  stdout: string;
-  stderr: string;
-}
-
-class SandboxProcessError extends Error {
+export class SandboxIsolationError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "SandboxProcessError";
+    this.name = "SandboxIsolationError";
   }
 }
 
@@ -43,231 +36,63 @@ function warningSink(options: SandboxOptions): (message: string) => void {
   return options.onWarning ?? ((message) => process.stderr.write(`${message}\n`));
 }
 
-function npmCommand(): string {
-  return process.platform === "win32" ? "npm.cmd" : "npm";
+function reducedIsolationWarning(reason: string): string {
+  return [
+    `[SANDBOX] Warning: reduced isolation mode (${reason}).`,
+    "The child runner limits time, heap, output, and common ESM/CommonJS escape modules, but it is not full containment.",
+    "Only use it for packages you trust or from a disposable VM."
+  ].join(" ");
 }
 
-function safePath(): string {
-  return process.env.PATH ?? process.env.Path ?? "";
-}
-
-function installationEnvironment(root: string): NodeJS.ProcessEnv {
-  return {
-    PATH: safePath(),
-    HOME: path.join(root, ".home"),
-    USERPROFILE: path.join(root, ".home"),
-    TMPDIR: path.join(root, ".tmp"),
-    TEMP: path.join(root, ".tmp"),
-    TMP: path.join(root, ".tmp"),
-    npm_config_cache: path.join(root, ".npm-cache"),
-    npm_config_update_notifier: "false"
-  };
-}
-
-function childEnvironment(root: string, coverageDirectory?: string): NodeJS.ProcessEnv {
-  return {
-    ...installationEnvironment(root),
-    NODE_ENV: "production",
-    NECROMANCER_NETWORK: "disabled",
-    NO_PROXY: "*",
-    no_proxy: "*",
-    HTTP_PROXY: "",
-    HTTPS_PROXY: "",
-    ALL_PROXY: "",
-    http_proxy: "",
-    https_proxy: "",
-    all_proxy: "",
-    NECROMANCER_PACKAGE_PATH: path.join(root, "package"),
-    ...(coverageDirectory ? { NODE_V8_COVERAGE: coverageDirectory } : {})
-  };
-}
-
-function truncateOutput(output: string): string {
-  const trimmed = output.trim();
-  return trimmed.length > 2_000 ? `${trimmed.slice(0, 2_000)}…` : trimmed;
-}
-
-async function runCommand(command: string, args: string[], options: CommandOptions): Promise<CommandResult> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let stdout = "";
-    let stderr = "";
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: "pipe",
-      windowsHide: true
-    });
-    const finish = (callback: () => void): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      callback();
-    };
-    const append = (current: string, chunk: Buffer): string => {
-      const next = current + chunk.toString("utf8");
-      if (next.length > MAX_PROCESS_OUTPUT_BYTES) {
-        child.kill("SIGKILL");
-        finish(() => reject(new SandboxProcessError("Sandbox process exceeded the 1 MB output safety limit.")));
-      }
-      return next;
-    };
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(() => reject(new SandboxProcessError(`Sandbox process exceeded its ${options.timeoutMs} ms time limit.`)));
-    }, options.timeoutMs);
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout = append(stdout, chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr = append(stderr, chunk);
-    });
-    child.on("error", (error) => {
-      finish(() => reject(new SandboxProcessError(`Could not start ${command}: ${error.message}`)));
-    });
-    child.on("close", (code, signal) => {
-      if (settled) return;
-      if (code === 0) {
-        finish(() => resolve({ stdout, stderr }));
-        return;
-      }
-      const status = signal ? `signal ${signal}` : `exit code ${code}`;
-      const detail = truncateOutput(stderr || stdout);
-      finish(() => reject(new SandboxProcessError(`${command} exited with ${status}${detail ? `: ${detail}` : "."}`)));
-    });
-
-    child.stdin.on("error", (error) => finish(() => reject(new SandboxProcessError(`Could not write to ${command}: ${error.message}`))));
-    if (options.input !== undefined) child.stdin.end(options.input);
-    else child.stdin.end();
-  });
-}
-
-async function dockerAvailable(): Promise<boolean> {
-  try {
-    await runCommand("docker", ["info", "--format", "{{.ServerVersion}}"], { timeoutMs: 3_000 });
-    return true;
-  } catch {
-    return false;
+function parseInvocationResult(value: unknown): InvocationResult {
+  const parsed = value as InvocationResult;
+  if (typeof parsed !== "object" || parsed === null || typeof parsed.ok !== "boolean" || typeof parsed.durationMs !== "number") {
+    throw new Error("malformed response");
   }
-}
-
-async function dockerEnvironment(root: string): Promise<NodeJS.ProcessEnv> {
-  const dockerConfig = path.join(root, ".docker-config");
-  await mkdir(dockerConfig, { recursive: true });
-  await writeFile(path.join(dockerConfig, "config.json"), `${JSON.stringify({ auths: {} })}\n`, "utf8");
-
-  let dockerHost = process.env.DOCKER_HOST;
-  if (!dockerHost) {
-    const context = (await runCommand("docker", ["context", "show"], { timeoutMs: 3_000 })).stdout.trim();
-    if (context) {
-      dockerHost = (
-        await runCommand("docker", ["context", "inspect", context, "--format", "{{ .Endpoints.docker.Host }}"], {
-          timeoutMs: 3_000
-        })
-      ).stdout.trim();
-    }
+  if (parsed.ok && !("value" in parsed)) throw new Error("missing value");
+  if (!parsed.ok && (!("error" in parsed) || !parsed.error || typeof parsed.error.name !== "string" || typeof parsed.error.message !== "string")) {
+    throw new Error("missing error");
   }
-
-  return {
-    PATH: safePath(),
-    DOCKER_CONFIG: dockerConfig,
-    ...(dockerHost ? { DOCKER_HOST: dockerHost } : {})
-  };
+  return parsed;
 }
 
-function dockerUserArgs(): string[] {
-  if (process.platform === "win32" || !process.getuid || !process.getgid) return [];
-  return ["--user", `${process.getuid()}:${process.getgid()}`];
-}
-
-function dockerMount(root: string, readOnly = false): string {
-  return `${path.resolve(root)}:/work${readOnly ? ":ro" : ""}`;
-}
-
-function parseRpcResponse(output: string): InvocationResult {
+function parseRpcResponse(output: string, nonce: string): InvocationResult {
+  const prefix = `${RPC_PREFIX}${nonce}:`;
   const line = output
     .split(/\r?\n/)
-    .filter((candidate) => candidate.startsWith(RPC_PREFIX))
+    .filter((candidate) => candidate.startsWith(prefix))
     .at(-1);
   if (!line) throw new SandboxProcessError("Sandbox did not return an RPC response.");
 
   try {
-    const parsed = JSON.parse(line.slice(RPC_PREFIX.length)) as InvocationResult;
-    if (typeof parsed !== "object" || parsed === null || typeof parsed.ok !== "boolean" || typeof parsed.durationMs !== "number") {
-      throw new Error("malformed response");
-    }
-    if (parsed.ok && !("value" in parsed)) throw new Error("missing value");
-    if (!parsed.ok && (!("error" in parsed) || !parsed.error || typeof parsed.error.name !== "string" || typeof parsed.error.message !== "string")) {
-      throw new Error("missing error");
-    }
-    return parsed;
+    return parseInvocationResult(JSON.parse(line.slice(prefix.length)));
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown error";
     throw new SandboxProcessError(`Sandbox returned invalid RPC JSON: ${detail}`);
   }
 }
 
-async function prepareWorkspace(source: SandboxSource): Promise<string> {
-  const workspaceBase = path.join(process.cwd(), ".necromancer-cache");
-  await mkdir(workspaceBase, { recursive: true });
-  const root = await mkdtemp(path.join(workspaceBase, "sandbox-"));
-  const packagePath = path.join(root, "package");
+function parseBatchResponse(output: string, expectedCount: number): InvocationResult[] {
+  const line = output
+    .split(/\r?\n/)
+    .filter((candidate) => candidate.startsWith(BATCH_PREFIX))
+    .at(-1);
+  if (!line) throw new SandboxProcessError("Sandbox did not return a batch RPC response.");
   try {
-    await cp(source.packagePath, packagePath, { recursive: true, force: true, verbatimSymlinks: true });
-    await stripStagedPackageScripts(packagePath);
-    await Promise.all([
-      mkdir(path.join(root, ".home"), { recursive: true }),
-      mkdir(path.join(root, ".tmp"), { recursive: true }),
-      writeFile(
-        path.join(root, "package.json"),
-        `${JSON.stringify({ private: true, type: "commonjs" }, null, 2)}\n`,
-        "utf8"
-      ),
-      writeFile(path.join(root, "runner.cjs"), RUNNER_SOURCE, "utf8")
-    ]);
-    return root;
+    const parsed: unknown = JSON.parse(line.slice(BATCH_PREFIX.length));
+    if (!parsed || typeof parsed !== "object") throw new Error("malformed response");
+    if ("error" in parsed) {
+      const error = (parsed as { error?: unknown }).error;
+      const message = error && typeof error === "object" && "message" in error ? String((error as { message: unknown }).message) : "unknown batch error";
+      throw new Error(message);
+    }
+    const results = (parsed as { results?: unknown }).results;
+    if (!Array.isArray(results) || results.length !== expectedCount) throw new Error("unexpected result count");
+    return results.map(parseInvocationResult);
   } catch (error) {
-    await rm(root, { recursive: true, force: true });
-    throw error;
+    const detail = error instanceof Error ? error.message : "unknown error";
+    throw new SandboxProcessError(`Sandbox returned invalid batch RPC JSON: ${detail}`);
   }
-}
-
-async function installWithChild(root: string): Promise<void> {
-  await runCommand(npmCommand(), ["install", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund", "--package-lock=false"], {
-    cwd: path.join(root, "package"),
-    env: installationEnvironment(root),
-    timeoutMs: 60_000
-  });
-}
-
-async function installWithDocker(root: string, env: NodeJS.ProcessEnv): Promise<void> {
-  await runCommand(
-    "docker",
-    [
-      "run",
-      "--rm",
-      "--network=bridge",
-      ...dockerUserArgs(),
-      "-v",
-      dockerMount(root),
-      "-w",
-      "/work/package",
-      "-e",
-      "npm_config_cache=/tmp/npm-cache",
-      "-e",
-      "npm_config_update_notifier=false",
-      DOCKER_IMAGE,
-      "npm",
-      "install",
-      "--ignore-scripts",
-      "--omit=dev",
-      "--no-audit",
-      "--no-fund",
-      "--package-lock=false"
-    ],
-    { env, timeoutMs: 60_000 }
-  );
 }
 
 class Runner implements SandboxRunner {
@@ -285,47 +110,60 @@ class Runner implements SandboxRunner {
     this.mode = mode;
   }
 
+  private dockerArgs(program: "runner.cjs" | "batch-runner.cjs"): string[] {
+    const coverageArgs = this.coverageDirectory
+      ? ["-v", dockerMount(this.coverageDirectory, "/coverage"), "-e", "NODE_V8_COVERAGE=/coverage"]
+      : [];
+    return [
+      "run",
+      "--rm",
+      "--network=none",
+      ...dockerSafetyArgs(),
+      ...dockerUserArgs(),
+      "-i",
+      "-v",
+      dockerMount(this.root, "/work", true),
+      ...coverageArgs,
+      "-w",
+      "/work",
+      "-e",
+      "NECROMANCER_PACKAGE_PATH=/work/package",
+      "-e",
+      "NECROMANCER_NETWORK=disabled",
+      DOCKER_IMAGE,
+      "node",
+      program
+    ];
+  }
+
+  private async execute(program: "runner.cjs" | "batch-runner.cjs", input: string, timeoutMs: number): Promise<string> {
+    const result =
+      this.mode === "docker"
+        ? await runSandboxCommand("docker", this.dockerArgs(program), { env: this.dockerEnv, input, timeoutMs })
+        : await runSandboxCommand(
+            process.execPath,
+            program === "runner.cjs"
+              ? ["--max-old-space-size=256", "--experimental-loader", "./loader.mjs", program]
+              : ["--max-old-space-size=256", program],
+            { cwd: this.root, env: childEnvironment(this.root, this.coverageDirectory), input, timeoutMs }
+          );
+    return result.stdout;
+  }
+
   private async request(exportPath: string, args: unknown[], operation: "invoke" | "inspect"): Promise<InvocationResult> {
     if (this.disposed) throw new SandboxProcessError("This sandbox has already been disposed.");
     let input: string;
+    const nonce = randomBytes(16).toString("hex");
     try {
-      input = serializeRequest(this.source, exportPath, args, operation);
+      input = serializeRequest(this.source, exportPath, args, operation, nonce);
     } catch (error) {
       const detail = error instanceof Error ? error.message : "arguments could not be encoded safely";
       throw new SandboxProcessError(detail);
     }
-    const result =
-      this.mode === "docker"
-        ? await runCommand(
-            "docker",
-            [
-              "run",
-              "--rm",
-              "--network=none",
-              "--read-only",
-              "--tmpfs",
-              "/tmp",
-              ...dockerUserArgs(),
-              "-i",
-              "-v",
-              dockerMount(this.root, true),
-              "-w",
-              "/work",
-              "-e",
-              "NECROMANCER_PACKAGE_PATH=/work/package",
-              DOCKER_IMAGE,
-              "node",
-              "runner.cjs"
-            ],
-            { env: this.dockerEnv, input, timeoutMs: this.timeoutMs }
-          )
-        : await runCommand(process.execPath, ["runner.cjs"], {
-            cwd: this.root,
-            env: childEnvironment(this.root, this.coverageDirectory),
-            input,
-            timeoutMs: this.timeoutMs
-          });
-    return parseRpcResponse(result.stdout);
+    if (Buffer.byteLength(input, "utf8") > MAX_REQUEST_BYTES) {
+      throw new SandboxProcessError("Sandbox invocation arguments exceed the 256 KB input safety limit.");
+    }
+    return parseRpcResponse(await this.execute("runner.cjs", input, this.timeoutMs), nonce);
   }
 
   async inspect(): Promise<ModuleSurface> {
@@ -343,6 +181,29 @@ class Runner implements SandboxRunner {
     return this.request(exportPath, args, "invoke");
   }
 
+  async invokeBatch(invocations: SandboxInvocation[]): Promise<InvocationResult[]> {
+    if (this.disposed) throw new SandboxProcessError("This sandbox has already been disposed.");
+    const results: InvocationResult[] = [];
+    for (let start = 0; start < invocations.length; start += MAX_BATCH_INVOCATIONS) {
+      const batch = invocations.slice(start, start + MAX_BATCH_INVOCATIONS);
+      const requests = batch.map((invocation) => {
+        try {
+          return JSON.parse(serializeRequest(this.source, invocation.exportPath, invocation.args, "invoke", randomBytes(16).toString("hex"))) as unknown;
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "arguments could not be encoded safely";
+          throw new SandboxProcessError(detail);
+        }
+      });
+      const input = JSON.stringify({ requests, timeoutMs: this.timeoutMs });
+      if (Buffer.byteLength(input, "utf8") > MAX_REQUEST_BYTES) {
+        throw new SandboxProcessError("Sandbox batch invocation arguments exceed the 256 KB input safety limit.");
+      }
+      const timeoutMs = Math.min(MAX_BATCH_TIMEOUT_MS, this.timeoutMs * batch.length + 5_000);
+      results.push(...parseBatchResponse(await this.execute("batch-runner.cjs", input, timeoutMs), batch.length));
+    }
+    return results;
+  }
+
   coveragePaths(): { rawDirectory: string; sourceDirectory: string } | undefined {
     if (!this.coverageDirectory) return undefined;
     return { rawDirectory: this.coverageDirectory, sourceDirectory: path.join(this.root, "package") };
@@ -355,43 +216,44 @@ class Runner implements SandboxRunner {
   }
 }
 
+function fallbackAllowed(options: SandboxOptions): boolean {
+  return options.noDocker === true || options.allowReducedIsolation === true;
+}
+
 /**
- * Install an exhumed package without running lifecycle scripts, then expose it through
- * a one-shot RPC runner. The target is never imported into the Necromancer process.
+ * Install an exhumed package without lifecycle scripts, then expose it through a
+ * one-shot RPC runner. Docker is required by default because child mode is only
+ * a diagnostic fallback, never a containment guarantee.
  */
 export async function createSandboxRunner(source: SandboxSource, options: SandboxOptions = {}): Promise<SandboxRunner> {
   const warn = warningSink(options);
   const root = await prepareWorkspace(source);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  let mode: RunnerMode = "child";
-  let dockerEnv: NodeJS.ProcessEnv | undefined;
-
+  const allowFallback = fallbackAllowed(options);
   try {
-    const needsInstall = (await stagedRuntimeDependencyNames(path.join(root, "package"))).length > 0;
-    if (options.coverageDirectory) {
-      await mkdir(options.coverageDirectory, { recursive: true });
-      warn(
-        "[SANDBOX] Behavioral probing uses reduced-isolation child-process mode because V8 coverage must write locally. Docker currently isolates only the bare install/inspection step. The child runner is not full containment; run untrusted packages on a disposable machine or VM."
-      );
-      if (needsInstall) await installWithChild(root);
-    } else if (!options.noDocker && (await dockerAvailable())) {
+    if (options.coverageDirectory) await mkdir(options.coverageDirectory, { recursive: true });
+    const needsInstall = await packageNeedsInstall(root);
+    if (!options.noDocker && (await dockerAvailable())) {
       try {
-        dockerEnv = await dockerEnvironment(root);
+        const dockerEnv = await dockerClientEnvironment(root);
         if (needsInstall) await installWithDocker(root, dockerEnv);
-        mode = "docker";
+        return new Runner("docker", root, source, timeoutMs, dockerEnv, options.coverageDirectory);
       } catch (error) {
+        if (!allowFallback) {
+          const detail = error instanceof Error ? error.message : "unknown Docker error";
+          throw new SandboxIsolationError(`Docker sandbox setup failed (${detail}). Refusing to execute an untrusted package with reduced isolation; start Docker or explicitly request --no-docker from a disposable VM.`);
+        }
         const detail = error instanceof Error ? error.message : "unknown Docker error";
-        warn(`[SANDBOX] Docker setup failed; using reduced isolation child-process mode. ${detail}`);
-        if (needsInstall) await installWithChild(root);
+        warn(`[SANDBOX] Docker setup failed; continuing only because reduced isolation was explicitly requested. ${detail}`);
       }
-    } else {
-      const reason = options.noDocker ? "--no-docker was requested" : "Docker is unavailable";
-      warn(
-        `[SANDBOX] Warning: reduced isolation mode (${reason}). The child runner scrubs its environment and blocks common network and process-control modules, but is not full containment. Run untrusted packages on a disposable machine or VM.`
-      );
-      if (needsInstall) await installWithChild(root);
+    } else if (!allowFallback) {
+      throw new SandboxIsolationError("Docker is required to execute an untrusted package safely. Start Docker, or explicitly request --no-docker only from a disposable VM.");
     }
-    return new Runner(mode, root, source, timeoutMs, dockerEnv, options.coverageDirectory);
+
+    const reason = options.noDocker ? "--no-docker was explicitly requested" : "Docker setup failed after reduced isolation was explicitly permitted";
+    warn(reducedIsolationWarning(reason));
+    if (needsInstall) await installWithChild(root);
+    return new Runner("child", root, source, timeoutMs, undefined, options.coverageDirectory);
   } catch (error) {
     await rm(root, { recursive: true, force: true });
     throw error;

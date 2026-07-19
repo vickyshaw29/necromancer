@@ -8,6 +8,23 @@ const RPC_PREFIX = "NECROMANCER_RPC:";
 const TAG = "$necromancer";
 const MAX_DEPTH = 64;
 const MAX_ENTRIES = 1_000;
+const MAX_REQUEST_BYTES = 256 * 1024;
+const MAX_RESPONSE_BYTES = 32 * 1024;
+const MAX_STRING_LENGTH = 24 * 1024;
+const writeStdout = process.stdout.write.bind(process.stdout);
+const stringify = JSON.stringify.bind(JSON);
+
+function respond(nonce, response) {
+  let encoded = stringify(response);
+  if (Buffer.byteLength(encoded, "utf8") > MAX_RESPONSE_BYTES) {
+    encoded = stringify({
+      ok: true,
+      value: tagged("unserializable", { message: "Sandbox RPC response exceeded the 32 KB safety limit." }),
+      durationMs: typeof response.durationMs === "number" ? response.durationMs : 0
+    });
+  }
+  writeStdout(RPC_PREFIX + String(nonce || "") + ":" + encoded + "\n");
+}
 
 function tagged(kind, details) {
   return { [TAG]: kind, ...details };
@@ -26,15 +43,20 @@ function decodeWire(value) {
   }
   if (kind === "array") return value.value.map(decodeWire);
   if (kind === "object") {
-    const output = Object.create(null);
-    for (const [key, item] of Object.entries(value.value)) output[key] = decodeWire(item);
+    const output = {};
+    for (const [key, item] of Object.entries(value.value)) {
+      Object.defineProperty(output, key, { value: decodeWire(item), enumerable: true, configurable: true, writable: true });
+    }
     return output;
   }
   return value;
 }
 
 function jsonSafe(value, valuePath = "$", ancestors = new Map(), depth = 0) {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    return value.length <= MAX_STRING_LENGTH ? value : tagged("truncated", { reason: "max_string", length: value.length });
+  }
   if (typeof value === "undefined") return tagged("undefined", {});
   if (typeof value === "bigint") return tagged("bigint", { value: value.toString() });
   if (typeof value === "number") {
@@ -140,8 +162,8 @@ function jsonSafe(value, valuePath = "$", ancestors = new Map(), depth = 0) {
 }
 
 function errorMessage(error) {
-  if (error && typeof error === "object" && "message" in error) return String(Reflect.get(error, "message"));
-  return String(error);
+  const message = error && typeof error === "object" && "message" in error ? String(Reflect.get(error, "message")) : String(error);
+  return message.length <= MAX_STRING_LENGTH ? message : message.slice(0, MAX_STRING_LENGTH) + "…";
 }
 
 function serializeError(error) {
@@ -152,7 +174,7 @@ function serializeError(error) {
 }
 
 function blockEscapeModules() {
-  const blockedNames = new Set(["child_process", "worker_threads", "vm", "module"]);
+  const blockedNames = new Set(["child_process", "worker_threads", "cluster", "vm", "module", "inspector", "process", "fs", "http", "https", "http2", "net", "tls", "dgram", "dns"]);
   const isBlocked = (moduleName) => blockedNames.has(String(moduleName).replace(/^node:/, "").split("/")[0]);
   const denied = (moduleName) => {
     throw new Error("Process-control module " + JSON.stringify(moduleName) + " is disabled by the Necromancer child-process sandbox.");
@@ -258,20 +280,25 @@ function inspectModule(moduleValue, packageName) {
 
 async function readRequest() {
   const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    size += chunk.length;
+    if (size > MAX_REQUEST_BYTES) throw new Error("Sandbox RPC request exceeded the 256 KB input safety limit.");
+    chunks.push(chunk);
+  }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
 async function main() {
   if (process.env.NECROMANCER_NETWORK === "disabled") disableNetwork();
-  const request = await readRequest();
+  request = await readRequest();
   const start = process.hrtime.bigint();
   let response;
   try {
     const moduleValue = await loadModule(request.packageName);
     if (request.operation === "inspect") {
       response = { ok: true, value: inspectModule(moduleValue, request.packageName), durationMs: Number(process.hrtime.bigint() - start) / 1e6 };
-      process.stdout.write(RPC_PREFIX + JSON.stringify(response) + "\n");
+      respond(request.nonce, response);
       return;
     }
     const target = resolveExport(moduleValue, request.exportPath, request.packageName);
@@ -283,10 +310,33 @@ async function main() {
   } catch (error) {
     response = { ok: false, error: serializeError(error), durationMs: Number(process.hrtime.bigint() - start) / 1e6 };
   }
-  process.stdout.write(RPC_PREFIX + JSON.stringify(response) + "\n");
+  respond(request.nonce, response);
 }
 
+let request;
 main().catch((error) => {
-  process.stdout.write(RPC_PREFIX + JSON.stringify({ ok: false, error: serializeError(error), durationMs: 0 }) + "\n");
+  respond(request && request.nonce, { ok: false, error: serializeError(error), durationMs: 0 });
 });
+`;
+
+/**
+ * The child fallback uses this Node loader to cover ESM imports, which cannot be
+ * intercepted by CommonJS's module._load hook in RUNNER_SOURCE.
+ */
+export const LOADER_SOURCE = String.raw`const blockedNames = new Set([
+  "child_process", "worker_threads", "cluster", "vm", "module", "inspector", "process",
+  "fs", "http", "https", "http2", "net", "tls", "dgram", "dns"
+]);
+
+function blocked(specifier) {
+  const name = String(specifier).replace(/^node:/, "").split("/")[0];
+  return blockedNames.has(name);
+}
+
+export async function resolve(specifier, context, nextResolve) {
+  if (blocked(specifier)) {
+    throw new Error("Module " + JSON.stringify(specifier) + " is disabled by the Necromancer child-process sandbox.");
+  }
+  return nextResolve(specifier, context);
+}
 `;

@@ -3,6 +3,9 @@ import { mkdir, mkdtemp, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "./json.js";
 
+const MAX_PROBE_ARTIFACT_BYTES = 4 * 1024 * 1024;
+const MAX_CACHE_LOOKUPS = 32;
+
 function safeArtifactName(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "package";
 }
@@ -20,6 +23,7 @@ function artifactPrefix(packageName: string, version: string): string {
 interface ProbeArtifactIdentity {
   packageName: string;
   version: string;
+  sourceTarballSha512?: string;
 }
 
 export function parsePackageSpecifier(value: string): { packageName: string; version?: string } {
@@ -35,18 +39,27 @@ export function parsePackageSpecifier(value: string): { packageName: string; ver
 async function readProbeArtifactIdentity(directory: string): Promise<ProbeArtifactIdentity | undefined> {
   try {
     const details = await stat(path.join(directory, "behaviors.json"));
-    if (!details.isFile()) return undefined;
+    if (!details.isFile() || details.size > MAX_PROBE_ARTIFACT_BYTES) return undefined;
     const artifact: unknown = JSON.parse(await readFile(path.join(directory, "behaviors.json"), "utf8"));
-    if (!isRecord(artifact) || typeof artifact.packageName !== "string" || typeof artifact.version !== "string") {
+    if (
+      !isRecord(artifact) ||
+      typeof artifact.packageName !== "string" ||
+      typeof artifact.version !== "string" ||
+      (artifact.sourceTarballSha512 !== undefined && typeof artifact.sourceTarballSha512 !== "string")
+    ) {
       return undefined;
     }
-    return { packageName: artifact.packageName, version: artifact.version };
+    return {
+      packageName: artifact.packageName,
+      version: artifact.version,
+      ...(typeof artifact.sourceTarballSha512 === "string" ? { sourceTarballSha512: artifact.sourceTarballSha512 } : {})
+    };
   } catch {
     return undefined;
   }
 }
 
-export async function findLatestProbeArtifactForPackage(packageName: string, version?: string): Promise<string | undefined> {
+export async function findLatestProbeArtifactForPackage(packageName: string, version?: string, sourceTarballSha512?: string): Promise<string | undefined> {
   const prefix = version ? `${artifactPrefix(packageName, version)}-` : undefined;
   let entries: string[];
   try {
@@ -55,28 +68,38 @@ export async function findLatestProbeArtifactForPackage(packageName: string, ver
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
     throw error;
   }
-  const candidates = await Promise.all(
-    entries
-      .filter((entry) => !prefix || entry.startsWith(prefix))
-      .map(async (entry) => {
+  const eligible = entries.filter((entry) => !prefix || entry.startsWith(prefix));
+  const candidates: Array<{ directory: string; modified: number }> = [];
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(MAX_CACHE_LOOKUPS, eligible.length) }, async () => {
+      while (next < eligible.length) {
+        const entry = eligible[next];
+        next += 1;
         const directory = path.join(probeArtifactsDirectory(), entry);
         try {
           const details = await stat(path.join(directory, "behaviors.json"));
-          if (!details.isFile()) return undefined;
+          if (!details.isFile() || details.size > MAX_PROBE_ARTIFACT_BYTES) continue;
           const artifact = await readProbeArtifactIdentity(directory);
-          return artifact?.packageName === packageName && (version === undefined || artifact.version === version) ? { directory, modified: details.mtimeMs } : undefined;
+          if (
+            artifact?.packageName === packageName &&
+            (version === undefined || artifact.version === version) &&
+            (sourceTarballSha512 === undefined || artifact.sourceTarballSha512 === sourceTarballSha512)
+          ) {
+            candidates.push({ directory, modified: details.mtimeMs });
+          }
         } catch {
-          return undefined;
+          continue;
         }
-      })
+      }
+    })
   );
   return candidates
-    .filter((candidate): candidate is { directory: string; modified: number } => candidate !== undefined)
     .sort((left, right) => right.modified - left.modified)[0]?.directory;
 }
 
-export async function findLatestProbeArtifact(packageName: string, version: string): Promise<string | undefined> {
-  return findLatestProbeArtifactForPackage(packageName, version);
+export async function findLatestProbeArtifact(packageName: string, version: string, sourceTarballSha512?: string): Promise<string | undefined> {
+  return findLatestProbeArtifactForPackage(packageName, version, sourceTarballSha512);
 }
 
 export async function createProbeArtifactDirectory(packageName: string, version: string, output?: string): Promise<string> {

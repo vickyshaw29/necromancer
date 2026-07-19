@@ -1,6 +1,7 @@
 import { ProbeArtifact } from "../distill/index.js";
 import { OriginalPackageReceipt, TriageResult } from "../exhume/index.js";
 import { ResurrectionResult } from "../resurrect/index.js";
+import type { ArgumentShapeCompleteness, HeldOutValidation } from "./observation.js";
 
 export interface OsvAdvisoryResult {
   status: "known" | "unknown";
@@ -56,6 +57,12 @@ export interface ProvenanceReceipt {
   observation: {
     recordedBehaviorCount: number;
     branchCoveragePercent: number;
+    lineCoveragePercent: number;
+    functionCoveragePercent: number;
+    observedArgumentCounts: number[];
+    callsWithTwoOrMoreArguments: number;
+    argumentShapeCompleteness: ArgumentShapeCompleteness | "not_recorded";
+    heldOutValidation: HeldOutValidation | "not_recorded";
     probeEngine: string;
     artifactDirectoryName: string;
   };
@@ -94,6 +101,7 @@ export interface ReportEvidence {
 
 export interface ReportData extends ReportEvidence {
   provenance: ProvenanceReceipt;
+  replay?: true;
 }
 
 export interface ReportResult {

@@ -79,4 +79,20 @@ describe("static triage", () => {
     expect(result).toMatchObject({ verdict: "IN_SCOPE", filesystemImports: [] });
     expect(result.loc).toBeLessThan(10);
   });
+
+  it("rejects dynamic runtime access rather than probing it", async () => {
+    const cache = path.join(process.cwd(), ".necromancer-cache");
+    await mkdir(cache, { recursive: true });
+    const packagePath = await mkdtemp(path.join(cache, "triage-dynamic-"));
+    temporaryPaths.push(packagePath);
+    await Promise.all([
+      writeFile(path.join(packagePath, "package.json"), '{"name":"dynamic-fixture","version":"1.0.0"}\n', "utf8"),
+      writeFile(path.join(packagePath, "index.js"), 'module.exports = () => import("node:" + "fs");\n', "utf8")
+    ]);
+
+    const result = await triagePackage(packagePath);
+
+    expect(result.verdict).toBe("OUT_OF_SCOPE");
+    expect(result.reasons).toEqual(expect.arrayContaining([expect.objectContaining({ code: "DYNAMIC_RUNTIME_ACCESS" })]));
+  });
 });

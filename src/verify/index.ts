@@ -12,6 +12,8 @@ const MAX_PROVENANCE_BYTES = 4 * 1024 * 1024;
 
 export interface VerifyOptions {
   artifact?: string;
+  /** Explicitly run local suites with reduced isolation from a disposable VM. */
+  noDocker?: boolean;
 }
 
 export interface VerificationReceipt {
@@ -96,9 +98,14 @@ async function hashLine(label: string, filePath: string | undefined, expected: s
   }
 }
 
-async function suiteLine(target: "original" | "rebuilt", artifactDirectory: string): Promise<{ line: string; passed: boolean }> {
+async function suiteLine(target: "original" | "rebuilt", artifactDirectory: string, noDocker: boolean): Promise<{ line: string; passed: boolean }> {
   try {
-    const result: CharacterizationResult = await runCharacterization(artifactDirectory, { implementation: target, offline: true, readOnly: true });
+    const result: CharacterizationResult = await runCharacterization(artifactDirectory, {
+      implementation: target,
+      offline: true,
+      readOnly: true,
+      ...(noDocker ? { allowReducedIsolation: true, noDocker: true } : {})
+    });
     const passed = result.passed === result.total;
     return { line: `observed suite vs ${target}: ${passed ? "✓" : "✗"} ${result.passed} of ${result.total}`, passed };
   } catch (error) {
@@ -114,7 +121,7 @@ function notReverifiedLines(): string[] {
   ];
 }
 
-export async function verifyArtifact(artifactDirectory: string): Promise<VerificationReceipt> {
+export async function verifyArtifact(artifactDirectory: string, options: VerifyOptions = {}): Promise<VerificationReceipt> {
   const resolvedDirectory = path.resolve(artifactDirectory);
   const provenance = await readProvenance(resolvedDirectory);
   if (!provenance) {
@@ -137,8 +144,8 @@ export async function verifyArtifact(artifactDirectory: string): Promise<Verific
       hashes.push(await hashLine(`rebuilt/${source.path}`, sourcePath(rebuiltDirectory, source.path), source.sha256));
     }
   }
-  const original = await suiteLine("original", resolvedDirectory);
-  const rebuilt = await suiteLine("rebuilt", resolvedDirectory);
+  const original = await suiteLine("original", resolvedDirectory, options.noDocker === true);
+  const rebuilt = await suiteLine("rebuilt", resolvedDirectory, options.noDocker === true);
   const passed = [...hashes, original, rebuilt].every((check) => check.passed);
   return {
     exitCode: passed ? 0 : 1,
@@ -163,7 +170,7 @@ export async function verifyPackage(pkg: string, options: VerifyOptions = {}): P
       lines: [`No artifact found for ${pkg}. Run necromancer probe ${pkg} first or pass --artifact <directory>.`]
     };
   }
-  return verifyArtifact(artifactDirectory);
+  return verifyArtifact(artifactDirectory, options);
 }
 
 export async function runVerifyCommand(pkg: string, options: VerifyOptions): Promise<void> {

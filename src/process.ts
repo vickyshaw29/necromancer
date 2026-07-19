@@ -15,18 +15,48 @@ export interface ProcessOptions {
 
 const DEFAULT_MAX_OUTPUT_CHARS = 8_000;
 
-function append(current: string, chunk: Buffer, maxChars: number): string {
-  if (current.length >= maxChars) return current;
-  return current + chunk.toString("utf8").slice(0, maxChars - current.length);
+interface CapturedText {
+  chunks: string[];
+  length: number;
+}
+
+function append(output: CapturedText, chunk: Buffer, maxChars: number): void {
+  if (output.length >= maxChars) return;
+  const text = chunk.toString("utf8").slice(0, maxChars - output.length);
+  if (!text) return;
+  output.chunks.push(text);
+  output.length += text.length;
+}
+
+function outputText(output: CapturedText): string {
+  return output.chunks.join("");
+}
+
+function terminate(child: ReturnType<typeof spawn>): void {
+  if (child.pid && process.platform !== "win32") {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+      return;
+    } catch {
+      // The process may already have exited before its group was terminated.
+    }
+  }
+  child.kill("SIGKILL");
 }
 
 export async function runProcess(command: string, args: string[], options: ProcessOptions): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      detached: process.platform !== "win32"
+    });
     const maxOutputChars = options.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
     let settled = false;
-    let stdout = "";
-    let stderr = "";
+    const stdout: CapturedText = { chunks: [], length: 0 };
+    const stderr: CapturedText = { chunks: [], length: 0 };
     const finish = (callback: () => void): void => {
       if (settled) return;
       settled = true;
@@ -34,17 +64,17 @@ export async function runProcess(command: string, args: string[], options: Proce
       callback();
     };
     const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
+      terminate(child);
       finish(() => reject(new Error(`${command} exceeded its ${options.timeoutMs} ms limit.`)));
     }, options.timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout = append(stdout, chunk, maxOutputChars);
+      append(stdout, chunk, maxOutputChars);
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr = append(stderr, chunk, maxOutputChars);
+      append(stderr, chunk, maxOutputChars);
     });
     child.on("error", (error) => finish(() => reject(error)));
-    child.on("close", (code) => finish(() => resolve({ code, stdout, stderr })));
+    child.on("close", (code) => finish(() => resolve({ code, stdout: outputText(stdout), stderr: outputText(stderr) })));
   });
 }
 

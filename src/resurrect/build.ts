@@ -3,6 +3,8 @@ import { constants } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { processFailure, runProcess } from "../process.js";
+import { stagedInstallEnvironment } from "../staging.js";
+import { assertCandidateSourcePolicy } from "./candidate-policy.js";
 
 const MAX_SOURCE_CHARS = 200_000;
 
@@ -10,14 +12,12 @@ function npmCommand(): string {
   return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
-function normalizeSource(source: string): string {
+export function normalizeCandidateSource(source: string): string {
   const fenced = /^```(?:ts|typescript)?\s*\n([\s\S]*?)\n```\s*$/.exec(source.trim());
   const normalized = (fenced?.[1] ?? source).trim();
   if (!normalized) throw new Error("The rebuild engine returned an empty TypeScript implementation.");
   if (normalized.length > MAX_SOURCE_CHARS) throw new Error("The rebuild engine returned a TypeScript implementation larger than the 200,000-character limit.");
-  if (/original\/package|\.\.\/original\//.test(normalized)) {
-    throw new Error("The rebuild engine attempted to reference the original package, which violates the behavioral reconstruction contract.");
-  }
+  assertCandidateSourcePolicy(normalized);
   return `${normalized}\n`;
 }
 
@@ -79,7 +79,7 @@ export async function writeCandidateProject(rebuiltDirectory: string, source: st
   const sourceDirectory = path.join(rebuiltDirectory, "src");
   await mkdir(sourceDirectory, { recursive: true });
   await Promise.all([
-    writeFile(path.join(sourceDirectory, "index.ts"), normalizeSource(source), "utf8"),
+    writeFile(path.join(sourceDirectory, "index.ts"), normalizeCandidateSource(source), "utf8"),
     writeFile(path.join(rebuiltDirectory, "package.json"), projectManifest(), "utf8"),
     writeFile(path.join(rebuiltDirectory, "tsconfig.esm.json"), ESM_CONFIG, "utf8"),
     writeFile(path.join(rebuiltDirectory, "tsconfig.cjs.json"), CJS_CONFIG, "utf8")
@@ -108,8 +108,10 @@ async function compilerPath(rebuiltDirectory: string): Promise<string> {
   if (await fileExists(local)) return local;
   const host = hostTypeScript();
   if (host) return host;
+  const env = await stagedInstallEnvironment(rebuiltDirectory);
   const install = await runProcess(npmCommand(), ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=false"], {
     cwd: rebuiltDirectory,
+    env,
     timeoutMs: 60_000
   });
   if (install.code !== 0) throw processFailure("npm install for the rebuilt TypeScript compiler", install);
@@ -126,6 +128,31 @@ async function renameCommonJsFiles(directory: string): Promise<void> {
   }
 }
 
+const CJS_ENTRY_WRAPPER = `"use strict";
+const implementation = require("./implementation.cjs");
+const hasDefault = Object.prototype.hasOwnProperty.call(implementation, "default");
+const root = hasDefault ? implementation.default : implementation;
+
+if (root && (typeof root === "object" || typeof root === "function")) {
+  for (const key of Object.keys(implementation)) {
+    if (key === "default" || key === "__esModule" || Object.prototype.hasOwnProperty.call(root, key)) continue;
+    Object.defineProperty(root, key, { value: implementation[key], enumerable: true, configurable: true, writable: true });
+  }
+  if (!Object.prototype.hasOwnProperty.call(root, "default")) {
+    Object.defineProperty(root, "default", { value: root, enumerable: false, configurable: true, writable: true });
+  }
+}
+
+module.exports = root;
+`;
+
+async function writeCjsEntryWrapper(rebuiltDirectory: string): Promise<void> {
+  const cjsDirectory = path.join(rebuiltDirectory, "dist", "cjs");
+  const implementationPath = path.join(cjsDirectory, "index.cjs");
+  await rename(implementationPath, path.join(cjsDirectory, "implementation.cjs"));
+  await writeFile(path.join(cjsDirectory, "index.cjs"), CJS_ENTRY_WRAPPER, "utf8");
+}
+
 export async function buildCandidate(rebuiltDirectory: string): Promise<void> {
   const compiler = await compilerPath(rebuiltDirectory);
   await rm(path.join(rebuiltDirectory, "dist"), { recursive: true, force: true });
@@ -134,4 +161,5 @@ export async function buildCandidate(rebuiltDirectory: string): Promise<void> {
     if (build.code !== 0) throw processFailure(`TypeScript build (${config})`, build);
   }
   await renameCommonJsFiles(path.join(rebuiltDirectory, "dist", "cjs"));
+  await writeCjsEntryWrapper(rebuiltDirectory);
 }

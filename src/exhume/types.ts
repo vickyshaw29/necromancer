@@ -1,9 +1,12 @@
 export type ScopeReasonCode =
   | "NATIVE_MODULE"
   | "TOO_MANY_LINES"
+  | "TOO_MANY_FILES"
+  | "TOO_LARGE_SOURCE_FILE"
   | "TOO_MANY_RUNTIME_DEPENDENCIES"
   | "FILESYSTEM_USAGE"
-  | "NETWORK_USAGE";
+  | "NETWORK_USAGE"
+  | "DYNAMIC_RUNTIME_ACCESS";
 
 export interface ScopeReason {
   code: ScopeReasonCode;

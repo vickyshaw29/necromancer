@@ -1,0 +1,32 @@
+{
+  "fixture": "NECROMANCER offline report replay",
+  "packageName": "replay-fixture",
+  "version": "0.0.0",
+  "observedBehaviors": 3,
+  "reproducedBehaviors": 3,
+  "coverage": {
+    "branchPercent": 66.67,
+    "linePercent": 75,
+    "functionPercent": 50,
+    "branchesCovered": 2,
+    "branchesTotal": 3
+  },
+  "argumentShapes": {
+    "observedArities": [0, 1, 2],
+    "callsWithTwoOrMoreArguments": 1
+  },
+  "heldOutValidation": {
+    "passed": 1,
+    "total": 1
+  },
+  "advisoryScans": {
+    "original": {
+      "publishedOsvAdvisories": 0,
+      "scope": "original replay-fixture@0.0.0, fixture data"
+    },
+    "rebuild": {
+      "declaredRuntimeDependenciesScanned": 0,
+      "publishedOsvAdvisories": 0
+    }
+  }
+}

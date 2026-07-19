@@ -7,6 +7,7 @@ import { distillEngine, runDistillCommand } from "./distill/command.js";
 import { discardExhumedPackage, exhume, reportOutOfScope, TriageResult } from "./exhume/index.js";
 import { writeGraveyardIndex } from "./graveyard/index.js";
 import { loadDotEnv, probePackage, ProbeEnginePreference } from "./probe/index.js";
+import { writeReplayReport } from "./replay.js";
 import { resurrectEngine, runResurrectCommand } from "./resurrect/command.js";
 import { createSandboxRunner, SandboxRunner } from "./sandbox/index.js";
 import { printBanner, printPhase, printReproducibilityHandoff } from "./terminal.js";
@@ -49,7 +50,7 @@ function probeEngine(value: string): ProbeEnginePreference {
 
 async function runProbeCommand(
   pkg: string,
-  options: { maxBehaviors: number; fast?: boolean; engine: ProbeEnginePreference; output?: string }
+  options: { maxBehaviors: number; fast?: boolean; engine: ProbeEnginePreference; output?: string; docker?: boolean }
 ): Promise<void> {
   await loadDotEnv();
   printBanner();
@@ -68,7 +69,7 @@ async function runProbeCommand(
     printPhase(2, "SANDBOX", "Preparing child-process instrumentation for coverage…");
     sandbox = await createSandboxRunner(
       { packagePath: exhumed.packagePath, packageName: exhumed.manifest.name },
-      { coverageDirectory, onWarning: (message) => console.error(message) }
+      { coverageDirectory, noDocker: options.docker === false, onWarning: (message) => console.error(message) }
     );
     printPhase(3, "PROBE", "Discovering exports, examples, and deterministic behaviors…");
     const maxBehaviors = options.fast ? Math.min(options.maxBehaviors, 60) : options.maxBehaviors;
@@ -76,6 +77,7 @@ async function runProbeCommand(
       {
         packageName: exhumed.manifest.name,
         version: exhumed.manifest.version,
+        sourceTarballSha512: exhumed.original.localTarballSha512,
         packagePath: exhumed.packagePath,
         sandbox,
         artifactDirectory
@@ -151,6 +153,7 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--fast", "cap the probe at 60 behaviors")
     .option("--engine <engine>", "input planner: auto, api, codex, or heuristic", probeEngine, "auto")
     .option("--output <directory>", "directory for behaviors.json and coverage artifacts")
+    .option("--no-docker", "use the reduced-isolation child-process sandbox from a disposable VM")
     .action(runProbeCommand);
 
   program
@@ -159,7 +162,10 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--max-behaviors <count>", "maximum deterministic behaviors when a probe is needed", positiveInteger, 80)
     .option("--fast", "cap an automatically-run probe at 60 behaviors")
     .option("--engine <engine>", "prose and input planner: auto, api, codex, or heuristic", distillEngine, "auto")
-    .action(runDistillCommand);
+    .option("--no-docker", "use the reduced-isolation child-process sandbox from a disposable VM")
+    .action((pkg: string, options: { maxBehaviors: number; fast?: boolean; engine: ReturnType<typeof distillEngine>; docker?: boolean }) => {
+      return runDistillCommand(pkg, { ...options, noDocker: options.docker === false });
+    });
 
   program
     .command("resurrect <pkg>")
@@ -167,7 +173,10 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--max-behaviors <count>", "maximum deterministic behaviors when a probe is needed", positiveInteger, 80)
     .option("--fast", "cap an automatically-run probe at 60 behaviors")
     .option("--engine <engine>", "rebuild engine: auto, api, or codex", resurrectEngine, "auto")
-    .action(runResurrectCommand);
+    .option("--no-docker", "use the reduced-isolation child-process sandbox from a disposable VM")
+    .action((pkg: string, options: { maxBehaviors: number; fast?: boolean; engine: ReturnType<typeof resurrectEngine>; docker?: boolean }) => {
+      return runResurrectCommand(pkg, { ...options, noDocker: options.docker === false });
+    });
 
   program
     .command("graveyard")
@@ -179,10 +188,23 @@ export async function runCli(argv: string[]): Promise<void> {
     });
 
   program
+    .command("replay")
+    .description("render a local, no-network report UX fixture without reconstructing a package")
+    .option("--output <directory>", "directory for the local replay report")
+    .action(async (options: { output?: string }) => {
+      const replay = await writeReplayReport(options);
+      console.log(`Replay report: ${replay.reportPath}`);
+      console.log("Offline report UX replay only: no package was fetched, executed, rebuilt, or assessed.");
+    });
+
+  program
     .command("verify <pkg>")
     .description("re-measure local reconstruction evidence without network access")
     .option("--artifact <directory>", "artifact directory to verify instead of cache lookup")
-    .action(runVerifyCommand);
+    .option("--no-docker", "use the reduced-isolation local suite runner from a disposable VM")
+    .action((pkg: string, options: { artifact?: string; docker?: boolean }) => {
+      return runVerifyCommand(pkg, { artifact: options.artifact, noDocker: options.docker === false });
+    });
 
   await program.parseAsync(argv);
 }

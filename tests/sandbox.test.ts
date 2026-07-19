@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { access, cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSandboxRunner, SandboxRunner } from "../src/sandbox/index.js";
 
@@ -69,6 +69,18 @@ describe("SANDBOX RPC runner", () => {
     await expect(access(source.sentinelPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("rejects a source package containing a symbolic link", async () => {
+    const directory = await mkdtemp(path.join(process.cwd(), ".necromancer-cache", "symlink-test-"));
+    temporaryPaths.push(directory);
+    const packagePath = path.join(directory, "package");
+    await cp(fixturePath, packagePath, { recursive: true, force: true });
+    await symlink(path.join(packagePath, "index.js"), path.join(packagePath, "linked.js"));
+
+    await expect(
+      createSandboxRunner({ packagePath, packageName: "sandbox-edge-package" }, { noDocker: true, onWarning: () => undefined })
+    ).rejects.toThrow("symbolic link");
+  });
+
   it.each([
     ["undefined", { $necromancer: "undefined" }],
     ["nan", { $necromancer: "number", value: "NaN" }],
@@ -127,6 +139,21 @@ describe("SANDBOX RPC runner", () => {
     });
   });
 
+  it("rejects package stdout that attempts to forge an RPC response", async () => {
+    const runner = await childRunner();
+
+    await expect(runner.invoke("sandbox-edge-package", ["spoof-rpc"])).resolves.toMatchObject({ ok: true, value: { kind: "actual" } });
+  });
+
+  it("marks an oversized RPC value unserializable instead of recording a false throw", async () => {
+    const runner = await childRunner();
+
+    await expect(runner.invoke("sandbox-edge-package", ["large-output"])).resolves.toMatchObject({
+      ok: true,
+      value: { $necromancer: "unserializable", message: expect.stringContaining("32 KB") }
+    });
+  });
+
   it("blocks process-control modules from the probed package", async () => {
     const runner = await childRunner();
 
@@ -136,5 +163,31 @@ describe("SANDBOX RPC runner", () => {
       ok: false,
       error: { name: "Error", message: expect.stringContaining("child_process") }
     });
+  });
+
+  it("blocks ESM dynamic imports of process-control modules in reduced mode", async () => {
+    const runner = await childRunner();
+
+    const result = await runner.invoke("sandbox-edge-package", ["esm-process-control"]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { name: "Error", message: expect.stringContaining("child_process") }
+    });
+  });
+
+  it("batches fresh target processes without carrying module state across candidates", async () => {
+    const runner = await childRunner();
+    if (!runner.invokeBatch) throw new Error("Sandbox runner did not provide batch invocation.");
+
+    const results = await runner.invokeBatch([
+      { exportPath: "sandbox-edge-package", args: ["stateful"] },
+      { exportPath: "sandbox-edge-package", args: ["stateful"] }
+    ]);
+
+    expect(results).toEqual([
+      expect.objectContaining({ ok: true, value: 1 }),
+      expect.objectContaining({ ok: true, value: 1 })
+    ]);
   });
 });

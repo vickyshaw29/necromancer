@@ -27,6 +27,11 @@ export interface InvocationFailure {
 
 export type InvocationResult = InvocationSuccess | InvocationFailure;
 
+export interface SandboxInvocation {
+  exportPath: string;
+  args: unknown[];
+}
+
 export interface SandboxSource {
   packagePath: string;
   packageName: string;
@@ -43,11 +48,13 @@ export interface ModuleSurface {
 }
 
 export interface SandboxOptions {
-  /** Prefer the child-process runner even when Docker is available. */
+  /** Explicitly opt into the reduced-isolation child runner even when Docker is available. */
   noDocker?: boolean;
+  /** Permit child fallback when Docker setup fails. Use only from a disposable VM. */
+  allowReducedIsolation?: boolean;
   /** Per-invocation wall-clock cap. */
   timeoutMs?: number;
-  /** Enables V8 raw coverage output and selects the child runner for this sandbox. */
+  /** Enables V8 raw coverage output. Docker receives a dedicated writable coverage mount. */
   coverageDirectory?: string;
   /** Receives explicit fallback warnings; defaults to stderr. */
   onWarning?: (message: string) => void;
@@ -57,6 +64,8 @@ export interface SandboxRunner {
   readonly mode: RunnerMode;
   inspect(): Promise<ModuleSurface>;
   invoke(exportPath: string, args: unknown[]): Promise<InvocationResult>;
+  /** Bounded fresh-process batch; callers retain the same result order. */
+  invokeBatch?(invocations: SandboxInvocation[]): Promise<InvocationResult[]>;
   coveragePaths(): { rawDirectory: string; sourceDirectory: string } | undefined;
   dispose(): Promise<void>;
 }

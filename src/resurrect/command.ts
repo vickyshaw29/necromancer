@@ -28,7 +28,9 @@ async function hasDistilledFiles(artifactDirectory: string): Promise<boolean> {
 
 function osvSummary(result: ReportResult["data"]["originalOsv"]): string {
   if (result.status === "unknown") return "unknown, OSV unreachable";
-  return `${result.cveCount ?? 0} CVE aliases across ${result.advisoryCount ?? 0} OSV advisories`;
+  const advisories = result.advisoryCount ?? 0;
+  const aliases = result.cveCount ?? 0;
+  return `${advisories} published OSV ${advisories === 1 ? "advisory" : "advisories"}${aliases ? `; ${aliases} CVE ${aliases === 1 ? "alias" : "aliases"}` : ""}`;
 }
 
 function identifierSummary(result: ReportResult["data"]["originalOsv"]): string {
@@ -39,18 +41,24 @@ function identifierSummary(result: ReportResult["data"]["originalOsv"]): string 
 
 function originalOsvSummary(report: ReportResult): string {
   const { packageName, version, originalOsv } = report.data;
-  return `${osvSummary(originalOsv)} — original: ${packageName}@${version}, queried at report time${identifierSummary(originalOsv)}`;
+  return `${osvSummary(originalOsv)} — published advisory metadata for original ${packageName}@${version}, queried at report time${identifierSummary(originalOsv)}; not source-code analysis`;
 }
 
 function rebuiltOsvSummary(report: ReportResult): string {
   const { rebuiltOsv, after } = report.data;
   const scanned = rebuiltOsv.scannedDependencyCount ?? after.runtimeDependencies;
-  const scope = `rebuild: ${scanned} declared runtime dependencies scanned`;
+  const scope = `${scanned} declared rebuild runtime dependencies scanned`;
   if (rebuiltOsv.status === "unknown") return `unknown, OSV unreachable — ${scope}`;
   if ((rebuiltOsv.advisoryCount ?? 0) === 0) {
-    return `no advisories found across ${scanned} declared runtime dependencies — ${scope}${scanned === 0 ? "; measured result: no advisories found across 0 declared runtime dependencies (no network request made)" : ""}`;
+    return `no published OSV advisories returned across ${scanned} declared runtime dependencies — ${scope}${scanned === 0 ? "; no network request made" : ""}; does not analyze generated code or establish CVE remediation`;
   }
-  return `${osvSummary(rebuiltOsv)} — ${scope}${identifierSummary(rebuiltOsv)}`;
+  return `${osvSummary(rebuiltOsv)} — ${scope}${identifierSummary(rebuiltOsv)}; does not analyze generated code or establish CVE remediation`;
+}
+
+function lastRitesSummary(result: ResurrectionResult): string {
+  if (!result.lastRites) return "not recorded";
+  if (result.lastRites.total === 0) return "no eligible held-out cases";
+  return `${result.lastRites.passed} of ${result.lastRites.total} held-out behaviors passing`;
 }
 
 function printReportSummary(report: ReportResult): void {
@@ -58,9 +66,10 @@ function printReportSummary(report: ReportResult): void {
   const rows: Array<[string, string]> = [
     ["Final generator", resurrection.engine],
     ["Observed fidelity", `${resurrection.passed} of ${resurrection.total} observed behaviors, ${artifact.coverage.branchCoverage.toFixed(2)}% branch coverage of the original`],
+    ["Last Rites", lastRitesSummary(resurrection)],
     ["Unobserved boundary", unobservedBoundary(artifact.coverage).uncoveredBranchStatement],
-    ["CVEs before", originalOsvSummary(report)],
-    ["CVEs after", rebuiltOsvSummary(report)],
+    ["Published advisories — original", originalOsvSummary(report)],
+    ["Declared-dependency advisories — rebuild", rebuiltOsvSummary(report)],
     ["Runtime dependencies", `${before.runtimeDependencies} → ${after.runtimeDependencies}`],
     ["Source LOC", `${before.loc.toLocaleString()} → ${after.loc.toLocaleString()}`],
     ["Provenance", `${report.provenancePath} — ${integritySummary(report.data.provenance)}`],
@@ -76,6 +85,8 @@ export interface ResurrectCommandOptions {
   maxBehaviors: number;
   fast?: boolean;
   engine: RebuildEnginePreference;
+  /** Explicitly use the reduced-isolation runner from a disposable VM. */
+  noDocker?: boolean;
 }
 
 export function resurrectEngine(value: string): RebuildEnginePreference {
@@ -116,10 +127,21 @@ export async function runResurrectCommand(pkg: string, options: ResurrectCommand
       return;
     }
 
-    let artifactDirectory = await findLatestProbeArtifact(exhumed.manifest.name, exhumed.manifest.version);
+    let artifactDirectory = await findLatestProbeArtifact(
+      exhumed.manifest.name,
+      exhumed.manifest.version,
+      exhumed.original.localTarballSha512
+    );
     if (!artifactDirectory) {
       artifactDirectory = await createProbeArtifactDirectory(exhumed.manifest.name, exhumed.manifest.version);
-      await probeIntoArtifact(exhumed.manifest.name, exhumed.manifest.version, exhumed.packagePath, artifactDirectory, options);
+      await probeIntoArtifact(
+        exhumed.manifest.name,
+        exhumed.manifest.version,
+        exhumed.packagePath,
+        artifactDirectory,
+        options,
+        exhumed.original.localTarballSha512
+      );
     } else {
       printPhase(3, "PROBE", `Reusing ${path.join(artifactDirectory, "behaviors.json")}`);
     }
@@ -136,7 +158,11 @@ export async function runResurrectCommand(pkg: string, options: ResurrectCommand
       printPhase(4, "DISTILL", "Reusing SOUL.md and soul.test.ts.");
     }
     printPhase(5, "RESURRECT", "Rebuilding from observed behavior…");
-    const result = await resurrectArtifact({ artifact, artifactDirectory }, generator, { onEvent: printResurrectionEvent });
+    const result = await resurrectArtifact({ artifact, artifactDirectory }, generator, {
+      onEvent: printResurrectionEvent,
+      allowReducedIsolation: options.noDocker === true,
+      noDocker: options.noDocker === true
+    });
     printPhase(6, "REPORT", "Collecting compatibility, dependency, and advisory evidence…");
     const report = await createReport({
       packageName: exhumed.manifest.name,

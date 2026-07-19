@@ -53,6 +53,13 @@ export interface ProbeBehavior {
   throw?: SerializedError;
 }
 
+export interface ArgumentShapeCoverage {
+  fn: string;
+  requiredArgumentCounts: number[];
+  observedArgumentCounts: number[];
+  complete: boolean;
+}
+
 export interface CoverageSummary {
   branchCoverage: number;
   branchTotal?: number;
@@ -67,10 +74,14 @@ export interface CoverageSummary {
 export interface ProbeResult {
   packageName: string;
   version: string;
+  sourceTarballSha512?: string;
   engine: string;
   surface: ModuleSurface;
   examples: ExampleCall[];
   behaviors: ProbeBehavior[];
+  /** Deterministic cases withheld from SOUL.md and the rebuild work order. */
+  heldOutBehaviors: ProbeBehavior[];
+  argumentShapeCoverage: ArgumentShapeCoverage[];
   discardedNonDeterministic: number;
   coverage: CoverageSummary;
   artifactPath: string;
@@ -87,6 +98,7 @@ export interface ProbeOptions {
 export interface ProbeTarget {
   packageName: string;
   version: string;
+  sourceTarballSha512?: string;
   packagePath: string;
   sandbox: SandboxRunner;
   artifactDirectory: string;

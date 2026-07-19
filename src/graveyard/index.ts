@@ -11,6 +11,8 @@ interface ProbeSummary {
   version: string;
   behaviorCount: number;
   branchCoverage: number;
+  lineCoverage?: number;
+  functionCoverage?: number;
 }
 
 interface ReconstructionSummary {
@@ -54,7 +56,9 @@ function probeSummary(value: Record<string, unknown>): ProbeSummary | undefined 
     packageName: value.packageName,
     version: value.version,
     behaviorCount: value.behaviors.length,
-    branchCoverage: typeof coverage.branchCoverage === "number" && Number.isFinite(coverage.branchCoverage) ? coverage.branchCoverage : 0
+    branchCoverage: typeof coverage.branchCoverage === "number" && Number.isFinite(coverage.branchCoverage) ? coverage.branchCoverage : 0,
+    lineCoverage: typeof coverage.lineCoverage === "number" && Number.isFinite(coverage.lineCoverage) ? coverage.lineCoverage : undefined,
+    functionCoverage: typeof coverage.functionCoverage === "number" && Number.isFinite(coverage.functionCoverage) ? coverage.functionCoverage : undefined
   };
 }
 
@@ -110,7 +114,12 @@ function relativeReportLink(cacheDirectory: string, artifactDirectory: string): 
 function completedCard(cacheDirectory: string, artifact: CompletedArtifact): string {
   const state = reconstructionState(artifact.passed, artifact.total);
   const report = relativeReportLink(cacheDirectory, artifact.directory);
-  return `<a class="card" href="${escapeHtml(report)}"><div class="state">${escapeHtml(state)}</div><h2>† ${escapeHtml(artifact.packageName)}@${escapeHtml(artifact.version)}</h2><p>${artifact.passed} of ${artifact.total} observed behaviors</p><p>${artifact.branchCoverage.toFixed(2)}% branch coverage of the original</p><p class="muted">Rebuild engine: ${escapeHtml(artifact.engine)}</p></a>`;
+  const coverage = [
+    `branch ${artifact.branchCoverage.toFixed(2)}%`,
+    artifact.lineCoverage === undefined ? "line unavailable" : `line ${artifact.lineCoverage.toFixed(2)}%`,
+    artifact.functionCoverage === undefined ? "function unavailable" : `function ${artifact.functionCoverage.toFixed(2)}%`
+  ].join("; ");
+  return `<a class="card" href="${escapeHtml(report)}"><div class="state">${escapeHtml(state)}</div><h2>† ${escapeHtml(artifact.packageName)}@${escapeHtml(artifact.version)}</h2><p>${artifact.passed} of ${artifact.total} observed behaviors</p><p>Coverage: ${coverage} of the original</p><p class="muted">Rebuild engine: ${escapeHtml(artifact.engine)}</p></a>`;
 }
 
 function awaitingItem(artifact: AwaitingArtifact): string {

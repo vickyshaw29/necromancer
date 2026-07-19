@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "fixture": true,
+  "purpose": "Offline report UX replay only; not a package reconstruction receipt.",
+  "observation": {
+    "recordedBehaviorCount": 3,
+    "branchCoveragePercent": 66.67,
+    "lineCoveragePercent": 75,
+    "functionCoveragePercent": 50,
+    "observedArgumentCounts": [0, 1, 2],
+    "callsWithTwoOrMoreArguments": 1,
+    "heldOutValidation": {
+      "passed": 1,
+      "total": 1
+    }
+  },
+  "claimBoundary": "A passing recorded suite shows only observed compatibility. It does not prove security, vulnerability remediation, equivalence, or production safety."
+}

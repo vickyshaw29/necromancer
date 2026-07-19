@@ -1,4 +1,5 @@
 import type { ProbeBehavior } from "../probe/index.js";
+import { argumentShapeCompleteness, lastRitesValidation, observedArgumentShape } from "./observation.js";
 import { integritySummary, unobservedBoundary } from "./provenance.js";
 import type { ReportData } from "./types.js";
 
@@ -48,9 +49,11 @@ function featuredQuirk(soul: string, behaviors: ProbeBehavior[]): FeaturedQuirk 
   return { entry: entry.replace(/^\s*[-*]\s+/, ""), evidenceId, behavior };
 }
 
-function osvText(result: ReportData["originalOsv"]): string {
+function advisoryText(result: ReportData["originalOsv"]): string {
   if (result.status === "unknown") return "unknown, OSV unreachable";
-  return `${result.cveCount ?? 0} CVE aliases across ${result.advisoryCount ?? 0} OSV advisories`;
+  const advisories = result.advisoryCount ?? 0;
+  const aliases = result.cveCount ?? 0;
+  return `${advisories} published OSV ${advisories === 1 ? "advisory" : "advisories"}${aliases ? `; ${aliases} CVE ${aliases === 1 ? "alias" : "aliases"}` : ""}`;
 }
 
 function identifierText(result: ReportData["originalOsv"]): string {
@@ -60,39 +63,59 @@ function identifierText(result: ReportData["originalOsv"]): string {
 }
 
 function originalOsvScope(data: ReportData): string {
-  return `original: ${data.packageName}@${data.version}, queried at report time${identifierText(data.originalOsv)}`;
+  return `Scope: original ${data.packageName}@${data.version}, queried at report time${identifierText(data.originalOsv)}. This is published advisory metadata, not source-code analysis.`;
 }
 
 function rebuiltOsvText(data: ReportData): string {
   if (data.rebuiltOsv.status === "unknown") return "unknown, OSV unreachable";
   if ((data.rebuiltOsv.advisoryCount ?? 0) === 0) {
-    return `no advisories found across ${data.rebuiltOsv.scannedDependencyCount ?? data.after.runtimeDependencies} declared runtime dependencies`;
+    return `no published OSV advisories found across ${data.rebuiltOsv.scannedDependencyCount ?? data.after.runtimeDependencies} declared runtime dependencies`;
   }
-  return osvText(data.rebuiltOsv);
+  return advisoryText(data.rebuiltOsv);
 }
 
 function rebuiltOsvScope(data: ReportData): string {
   const scanned = data.rebuiltOsv.scannedDependencyCount ?? data.after.runtimeDependencies;
-  const scope = `rebuild: ${scanned} declared runtime dependencies scanned`;
-  if (scanned === 0) return `${scope}; measured result: no advisories found across 0 declared runtime dependencies (no network request made)`;
-  return `${scope}${identifierText(data.rebuiltOsv)}`;
+  const scope = `Scope: ${scanned} declared rebuild runtime dependencies scanned`;
+  const measured = scanned === 0 ? "; no network request was needed" : identifierText(data.rebuiltOsv);
+  return `${scope}${measured}. This scan does not analyze generated code or establish CVE remediation.`;
 }
 
 export function reconstructionState(passed: number, total: number): string {
-  const ratio = total === 0 ? 0 : passed / total;
   if (total > 0 && passed === 0) return "FAILED RECONSTRUCTION";
-  return ratio >= 0.9 ? "REVIVED" : "PARTIAL RECONSTRUCTION";
+  return total > 0 && passed === total ? "REVIVED" : "PARTIAL RECONSTRUCTION";
 }
 
 export function renderGraveyard(data: ReportData): string {
+  const replay = data.replay === true;
   const ratio = data.resurrection.total === 0 ? 0 : data.resurrection.passed / data.resurrection.total;
   const reproductionPercentage = Math.max(0, Math.min(100, ratio * 100));
   const coverage = data.artifact.coverage.branchCoverage;
   const coveragePercentage = Math.max(0, Math.min(100, coverage));
+  const coverageEvidence = `Branch ${coverage.toFixed(2)}% · Line ${data.artifact.coverage.lineCoverage.toFixed(2)}% · Function ${data.artifact.coverage.functionCoverage.toFixed(2)}%`;
+  const argumentShape = observedArgumentShape(data.artifact.behaviors);
+  const observedArities = argumentShape.arities.length ? argumentShape.arities.join(", ") : "none";
+  const argumentEvidence = `Observed arities: ${observedArities}; ${argumentShape.callsWithTwoOrMoreArguments} of ${data.artifact.behaviors.length} calls used 2+ arguments.`;
+  const shapeCompleteness = argumentShapeCompleteness(data.artifact);
+  const shapeEvidence = shapeCompleteness
+    ? shapeCompleteness.measuredFunctions === 0
+      ? "No callable exports were recorded; no argument-shape completeness result is claimed."
+      : `Argument-shape completeness: ${shapeCompleteness.completeFunctions} of ${shapeCompleteness.measuredFunctions} callable exports covered every required argument-count shape.`
+    : "Argument-shape completeness was not recorded; no completeness result is claimed.";
+  const heldOut = lastRitesValidation(data.resurrection);
+  const heldOutEvidence = heldOut
+    ? heldOut.total === 0
+      ? "Last Rites recorded no held-out cases; no held-out behavior result is claimed."
+      : `${heldOut.passed} of ${heldOut.total} held-out behaviors passed.`
+    : "Not recorded; no held-out behavior result is claimed.";
   const state = reconstructionState(data.resurrection.passed, data.resurrection.total);
+  const stateLabel = replay
+    ? `${state} — FIXTURE ONLY`
+    : state === "REVIVED" && heldOut && heldOut.total > 0 && heldOut.passed < heldOut.total
+      ? "OBSERVED SUITE REVIVED — HELD-OUT DIFFERENCES"
+      : state;
   const fidelity = `${data.resurrection.passed} of ${data.resurrection.total} observed behaviors, ${coverage.toFixed(2)}% branch coverage of the original`;
   const observedEvidence = `${data.resurrection.passed} of ${data.resurrection.total} observed behaviors reproduced`;
-  const coverageEvidence = `${coverage.toFixed(2)}% branch coverage of the original`;
   const boundary = unobservedBoundary(data.artifact.coverage);
   const quirk = featuredQuirk(data.soul, data.artifact.behaviors);
   const clusters = soulSection(data.soul, "Behavioral clusters", "No behavioral clusters were available.");
@@ -120,11 +143,13 @@ h1 { margin: 0; font-size: clamp(28px, 5vw, 48px); letter-spacing: .05em; overfl
 <body>
 <main>
   <header class="tombstone">
-    <div class="label">NECROMANCER resurrection receipt</div>
+    <div class="label">${replay ? "NECROMANCER report UX replay" : "NECROMANCER resurrection receipt"}</div>
     <h1>† ${escapeHtml(data.packageName)}@${escapeHtml(data.version)}</h1>
-    <p class="state">${state}</p>
+    <p class="state">${stateLabel}</p>
     <p class="fidelity">${escapeHtml(fidelity)}</p>
   </header>
+
+  ${replay ? `<article class="panel boundary-card" data-evidence="replay-boundary"><div class="label">Offline report UX replay</div><div class="value">This fixed fixture was rendered locally by NECROMANCER. It did not fetch, execute, rebuild, or assess a package; its values are not reconstruction evidence.</div></article>` : ""}
 
   <section class="receipt" aria-label="Resurrection evidence">
     <article class="panel evidence observed-card" data-evidence="observed-suite">
@@ -134,7 +159,7 @@ h1 { margin: 0; font-size: clamp(28px, 5vw, 48px); letter-spacing: .05em; overfl
     </article>
     <article class="panel evidence coverage-card" data-evidence="original-coverage">
       <div class="coverage-gauge" aria-hidden="true"></div>
-      <div><div class="label">Original-code evidence</div><div class="value">${escapeHtml(coverageEvidence)}</div></div>
+      <div><div class="label">Original-code coverage observed during probing</div><div class="value">${escapeHtml(coverageEvidence)}</div><p class="muted">Coverage is not a security score or a claim about unobserved behavior.</p></div>
     </article>
     <article class="panel boundary-card" data-evidence="unobserved-boundary"><div class="label">Unobserved boundary</div><div class="value">${escapeHtml(boundary.uncoveredBranchStatement)}</div></article>
     <article class="panel receipt-meta"><div class="label">Rebuild engine used</div><div class="value">${escapeHtml(data.resurrection.engine)}</div></article>
@@ -153,8 +178,13 @@ h1 { margin: 0; font-size: clamp(28px, 5vw, 48px); letter-spacing: .05em; overfl
     <p><strong>Original source was withheld.</strong></p>
   </article>
 
+  <article class="panel boundary-card" data-evidence="compatibility-security-boundary">
+    <div class="label">Compatibility / security boundary</div>
+    <div class="value">A passing recorded suite shows only observed compatibility. It does not prove security, vulnerability remediation, equivalence, or production safety.</div>
+  </article>
+
   <article class="panel featured">
-    <div class="label">Featured quirk — first recorded entry</div>
+    <div class="label">Featured recorded quirk</div>
     ${quirk ? `<p>${renderSoulProse(quirk.entry)}</p>
     <div class="featured-grid">
       <div><div class="label">Evidence ID</div><code>${escapeHtml(quirk.evidenceId)}</code></div>
@@ -166,8 +196,10 @@ h1 { margin: 0; font-size: clamp(28px, 5vw, 48px); letter-spacing: .05em; overfl
   <h2>Observed fidelity</h2>
   <section class="grid">
     <article class="panel"><div class="label">Rebuild rounds</div><div class="value">${data.resurrection.rounds.length}</div></article>
-    <article class="panel"><div class="label">CVEs / OSV before</div><div class="value ${data.originalOsv.status === "unknown" ? "warning" : ""}">${escapeHtml(osvText(data.originalOsv))}</div><p class="muted">${escapeHtml(originalOsvScope(data))}</p></article>
-    <article class="panel"><div class="label">CVEs / OSV after</div><div class="value ${data.rebuiltOsv.status === "unknown" ? "warning" : "after"}">${escapeHtml(rebuiltOsvText(data))}</div><p class="muted">${escapeHtml(rebuiltOsvScope(data))}</p></article>
+    <article class="panel"><div class="label">Observed argument shapes</div><div class="value">${escapeHtml(argumentEvidence)}</div><p class="muted">${escapeHtml(shapeEvidence)}</p><p class="muted">A missing arity or input shape is outside the compatibility claim.</p></article>
+    <article class="panel"><div class="label">Held-out behavior check</div><div class="value">${escapeHtml(heldOutEvidence)}</div></article>
+    <article class="panel"><div class="label">Published advisory scan — original</div><div class="value ${data.originalOsv.status === "unknown" ? "warning" : ""}">${escapeHtml(advisoryText(data.originalOsv))}</div><p class="muted">${escapeHtml(originalOsvScope(data))}</p></article>
+    <article class="panel"><div class="label">Declared-dependency advisory scan — rebuild</div><div class="value ${data.rebuiltOsv.status === "unknown" ? "warning" : "after"}">${escapeHtml(rebuiltOsvText(data))}</div><p class="muted">${escapeHtml(rebuiltOsvScope(data))}</p></article>
   </section>
 
   <h2>Source comparison</h2>

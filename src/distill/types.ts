@@ -1,4 +1,4 @@
-import { CoverageSummary, ProbeBehavior } from "../probe/index.js";
+import { ArgumentShapeCoverage, CoverageSummary, ProbeBehavior } from "../probe/index.js";
 import { ModuleSurface } from "../sandbox/index.js";
 
 export type DistillEngineName = "api" | "codex" | "heuristic";
@@ -7,7 +7,11 @@ export type DistillEnginePreference = DistillEngineName | "auto";
 export interface ProbeArtifact {
   packageName: string;
   version?: string;
+  sourceTarballSha512?: string;
   behaviors: ProbeBehavior[];
+  /** Sealed Last Rites cases are deliberately absent from SOUL.md and soul.test.ts. */
+  heldOutBehaviors?: ProbeBehavior[];
+  argumentShapeCoverage?: ArgumentShapeCoverage[];
   coverage: CoverageSummary;
   surface?: ModuleSurface;
 }

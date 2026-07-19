@@ -1,13 +1,15 @@
 import { createReadStream } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
+import { renderSoulTest } from "../distill/test-template.js";
 import { ProbeBehavior } from "../probe/index.js";
 import { buildCandidate, writeCandidateProject } from "./build.js";
-import { runCharacterization } from "./test-runner.js";
+import { validateCandidateConsumers } from "./consumer-check.js";
+import { ExecutionIsolationError, runCharacterization } from "./test-runner.js";
 import {
   CharacterizationResult,
   FailureFeedback,
+  LastRitesResult,
   PublicApiMember,
   RebuildGenerator,
   ResurrectionEventCallback,
@@ -21,7 +23,7 @@ const MAX_ROUNDS = 6;
 const MAX_WORK_ORDER_CHARS = 96_000;
 const MAX_FAILURES_FOR_PROMPT = 50;
 const MAX_FAILURE_DETAIL_CHARS = 1_200;
-const candidateRequire = createRequire(import.meta.url);
+const LAST_RITES_TEST_FILE = "last-rites.test.ts";
 
 async function readWorkOrderFile(filePath: string): Promise<string> {
   let text = "";
@@ -73,49 +75,6 @@ function failedRun(total: number, detail: string): CharacterizationResult {
   return { passed: 0, total, failures: [{ id: "", detail }] };
 }
 
-function isRootExport(member: PublicApiMember, packageName: string): boolean {
-  return member.path === packageName || member.path === ".";
-}
-
-function propertyPath(member: PublicApiMember, packageName: string): string[] {
-  const relative = member.path.startsWith(`${packageName}.`) ? member.path.slice(packageName.length + 1) : member.path.replace(/^\./, "");
-  return relative.split(".").filter(Boolean);
-}
-
-function hasExport(moduleValue: unknown, segments: string[]): boolean {
-  let current = moduleValue;
-  for (const segment of segments) {
-    if (!current || (typeof current !== "object" && typeof current !== "function")) return false;
-    if (!Object.hasOwn(current, segment)) return false;
-    current = Reflect.get(current, segment);
-  }
-  return true;
-}
-
-function defaultExport(moduleValue: unknown): unknown {
-  if (!moduleValue || (typeof moduleValue !== "object" && typeof moduleValue !== "function")) return undefined;
-  return Object.hasOwn(moduleValue, "default") ? Reflect.get(moduleValue, "default") : undefined;
-}
-
-function structuralMismatch(moduleValue: unknown, packageName: string, api: PublicApiMember[]): string | undefined {
-  const root = api.find((member) => isRootExport(member, packageName));
-  const rootValue = typeof moduleValue === "function" ? moduleValue : defaultExport(moduleValue);
-  if (root?.type === "function" && typeof rootValue !== "function") return "module root is not callable";
-  const missing = api.find((member) => !isRootExport(member, packageName) && !hasExport(moduleValue, propertyPath(member, packageName)));
-  return missing ? `named export ${JSON.stringify(missing.path)} is missing` : undefined;
-}
-
-async function validateCandidateShape(rebuiltDirectory: string, packageName: string, api: PublicApiMember[]): Promise<string | undefined> {
-  const entry = path.join(rebuiltDirectory, "dist", "cjs", "index.cjs");
-  try {
-    delete candidateRequire.cache[entry];
-    return structuralMismatch(candidateRequire(entry), packageName, api);
-  } catch (error) {
-    const detail = error instanceof Error && error.message ? error.message : "candidate module could not be loaded";
-    return `candidate module could not be loaded: ${detail}`;
-  }
-}
-
 function structuralFeedback(mismatch: string): StructuralFailureFeedback {
   if (mismatch === "module root is not callable") {
     return { kind: "structural", instruction: "The package root export must be a callable function; the previous candidate's root was not callable (module root is not callable)." };
@@ -134,27 +93,54 @@ async function executeCandidate(
   total: number,
   round: number,
   onEvent: ResurrectionEventCallback,
+  api: PublicApiMember[],
   packageName: string,
-  api: PublicApiMember[]
+  allowReducedIsolation: boolean,
+  noDocker: boolean
 ): Promise<CharacterizationResult> {
   const rebuiltDirectory = path.join(artifactDirectory, "rebuilt");
   try {
     onEvent({ type: "build-start", round });
     await writeCandidateProject(rebuiltDirectory, source);
     await buildCandidate(rebuiltDirectory);
-    const mismatch = await validateCandidateShape(rebuiltDirectory, packageName, api);
-    if (mismatch) return { passed: 0, total, failures: [], structuralFailure: mismatch };
+    const mismatch = await validateCandidateConsumers(rebuiltDirectory, packageName, api, { allowReducedIsolation, noDocker });
+    if (mismatch) {
+      const structuralFailure = mismatch.includes("package root is not callable") ? "module root is not callable" : mismatch;
+      return { passed: 0, total, failures: [], structuralFailure };
+    }
     onEvent({ type: "test-start", round });
-    return await runCharacterization(artifactDirectory);
+    return await runCharacterization(artifactDirectory, { allowReducedIsolation, noDocker });
   } catch (error) {
+    if (error instanceof ExecutionIsolationError) throw error;
     const detail = error instanceof Error ? error.message : "Candidate build failed.";
     return failedRun(total, detail);
   }
 }
 
+async function evaluateLastRites(
+  target: ResurrectionTarget,
+  allowReducedIsolation: boolean,
+  noDocker: boolean,
+  evaluate?: (artifactDirectory: string, testFile: string) => Promise<CharacterizationResult>
+): Promise<LastRitesResult> {
+  const heldOut = target.artifact.heldOutBehaviors ?? [];
+  if (heldOut.length === 0) return { passed: 0, total: 0 };
+  const testArtifact = { ...target.artifact, behaviors: heldOut };
+  await writeFile(path.join(target.artifactDirectory, LAST_RITES_TEST_FILE), renderSoulTest(testArtifact), "utf8");
+  const result = evaluate
+    ? await evaluate(target.artifactDirectory, LAST_RITES_TEST_FILE)
+    : await runCharacterization(target.artifactDirectory, { testFile: LAST_RITES_TEST_FILE, allowReducedIsolation, noDocker });
+  return { passed: result.passed, total: result.total };
+}
+
 export interface ResurrectionLoopOptions {
   evaluateCandidate?: (artifactDirectory: string, source: string, total: number, round: number, onEvent: ResurrectionEventCallback) => Promise<CharacterizationResult>;
+  evaluateLastRites?: (artifactDirectory: string, testFile: string) => Promise<CharacterizationResult>;
   onEvent?: ResurrectionEventCallback;
+  /** Explicitly permits host execution for trusted fixtures or a disposable VM. */
+  allowReducedIsolation?: boolean;
+  /** Explicitly selects reduced isolation instead of Docker. */
+  noDocker?: boolean;
 }
 
 export async function resurrectArtifact(
@@ -173,7 +159,19 @@ export async function resurrectArtifact(
   let feedback: FailureFeedback[] = [];
   let last: CharacterizationResult = { passed: 0, total, failures: [] };
   const api = publicApi(target);
-  const evaluate = options.evaluateCandidate ?? ((artifactDirectory, source, candidateTotal, round, onEvent) => executeCandidate(artifactDirectory, source, candidateTotal, round, onEvent, target.artifact.packageName, api));
+  const evaluate = options.evaluateCandidate ?? ((artifactDirectory, source, candidateTotal, round, onEvent) =>
+    executeCandidate(
+      artifactDirectory,
+      source,
+      candidateTotal,
+      round,
+      onEvent,
+      api,
+      target.artifact.packageName,
+      options.allowReducedIsolation === true,
+      options.noDocker === true
+    )
+  );
   const emit: ResurrectionEventCallback = (event) => options.onEvent?.(event);
   let selectedEngine = generator.name;
   let generatedCandidate = false;
@@ -229,6 +227,9 @@ export async function resurrectArtifact(
   }
 
   const complete = last.passed === total;
+  const lastRites = complete
+    ? await evaluateLastRites(target, options.allowReducedIsolation === true, options.noDocker === true, options.evaluateLastRites)
+    : undefined;
   const rebuiltDirectory = path.join(target.artifactDirectory, "rebuilt");
   await mkdir(rebuiltDirectory, { recursive: true });
   const resultPath = path.join(rebuiltDirectory, "result.json");
@@ -239,6 +240,7 @@ export async function resurrectArtifact(
     passed: last.passed,
     total,
     complete,
+    ...(lastRites ? { lastRites } : {}),
     resultPath
   };
   await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");

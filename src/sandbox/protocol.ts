@@ -32,9 +32,9 @@ function encodeWireValue(value: unknown, ancestors = new WeakSet<object>()): unk
   }
 }
 
-export function serializeRequest(source: SandboxSource, exportPath: string, args: unknown[], operation = "invoke"): string {
+export function serializeRequest(source: SandboxSource, exportPath: string, args: unknown[], operation = "invoke", nonce: string): string {
   try {
-    return JSON.stringify({ packageName: source.packageName, exportPath, args: encodeWireValue(args), operation });
+    return JSON.stringify({ packageName: source.packageName, exportPath, args: encodeWireValue(args), operation, nonce });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "arguments could not be encoded safely";
     throw new Error(detail);

@@ -14,6 +14,8 @@ export interface ProbeArtifactOptions {
   maxBehaviors: number;
   fast?: boolean;
   engine: ProbeEnginePreference;
+  /** Explicitly use the reduced-isolation runner from a disposable VM. */
+  noDocker?: boolean;
 }
 
 export async function probeIntoArtifact(
@@ -21,7 +23,8 @@ export async function probeIntoArtifact(
   version: string,
   packagePath: string,
   artifactDirectory: string,
-  options: ProbeArtifactOptions
+  options: ProbeArtifactOptions,
+  sourceTarballSha512?: string
 ): Promise<void> {
   const coverageDirectory = path.join(artifactDirectory, ".v8-coverage");
   let sandbox: SandboxRunner | undefined;
@@ -29,12 +32,12 @@ export async function probeIntoArtifact(
     printPhase(2, "SANDBOX", "Preparing child-process instrumentation for coverage…");
     sandbox = await createSandboxRunner(
       { packageName, packagePath },
-      { coverageDirectory, onWarning: (message) => console.error(message) }
+      { coverageDirectory, noDocker: options.noDocker === true, onWarning: (message) => console.error(message) }
     );
     printPhase(3, "PROBE", "Discovering deterministic observed behaviors…");
     const maxBehaviors = options.fast ? Math.min(options.maxBehaviors, 60) : options.maxBehaviors;
     await probePackage(
-      { packageName, version, packagePath, sandbox, artifactDirectory },
+      { packageName, version, sourceTarballSha512, packagePath, sandbox, artifactDirectory },
       { maxBehaviors, fast: options.fast, engine: options.engine, onNotice: (message) => console.error(message) }
     );
   } finally {
@@ -64,12 +67,23 @@ export async function runDistillCommand(pkg: string, options: DistillCommandOpti
       return;
     }
 
-    let artifactDirectory = await findLatestProbeArtifact(exhumed.manifest.name, exhumed.manifest.version);
+    let artifactDirectory = await findLatestProbeArtifact(
+      exhumed.manifest.name,
+      exhumed.manifest.version,
+      exhumed.original.localTarballSha512
+    );
     if (artifactDirectory) {
       printPhase(3, "PROBE", `Reusing ${path.join(artifactDirectory, "behaviors.json")}`);
     } else {
       artifactDirectory = await createProbeArtifactDirectory(exhumed.manifest.name, exhumed.manifest.version);
-      await probeIntoArtifact(exhumed.manifest.name, exhumed.manifest.version, exhumed.packagePath, artifactDirectory, options);
+      await probeIntoArtifact(
+        exhumed.manifest.name,
+        exhumed.manifest.version,
+        exhumed.packagePath,
+        artifactDirectory,
+        options,
+        exhumed.original.localTarballSha512
+      );
     }
     const artifact = await readProbeArtifact(path.join(artifactDirectory, "behaviors.json"));
     printPhase(4, "DISTILL", "Writing SOUL.md and deterministic characterization tests…");

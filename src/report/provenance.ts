@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { isRecord } from "../json.js";
 import { CoverageSummary } from "../probe/index.js";
+import { argumentShapeCompleteness, lastRitesValidation, observedArgumentShape } from "./observation.js";
 import { AuthoredSourceFile, ProvenanceReceipt, ReportEvidence, UnobservedBoundary } from "./types.js";
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
@@ -101,6 +102,9 @@ export async function writeProvenance(
     necromancerVersion(),
     probeEngine(artifactDirectory)
   ]);
+  const argumentShape = observedArgumentShape(data.artifact.behaviors);
+  const shapeCompleteness = argumentShapeCompleteness(data.artifact);
+  const heldOut = lastRitesValidation(data.resurrection);
   const provenance: ProvenanceReceipt = {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -109,6 +113,12 @@ export async function writeProvenance(
     observation: {
       recordedBehaviorCount: data.artifact.behaviors.length,
       branchCoveragePercent: data.artifact.coverage.branchCoverage,
+      lineCoveragePercent: data.artifact.coverage.lineCoverage,
+      functionCoveragePercent: data.artifact.coverage.functionCoverage,
+      observedArgumentCounts: argumentShape.arities,
+      callsWithTwoOrMoreArguments: argumentShape.callsWithTwoOrMoreArguments,
+      argumentShapeCompleteness: shapeCompleteness ?? "not_recorded",
+      heldOutValidation: heldOut ?? "not_recorded",
       probeEngine: planner,
       artifactDirectoryName: path.basename(path.resolve(artifactDirectory))
     },

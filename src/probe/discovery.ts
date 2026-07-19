@@ -1,27 +1,37 @@
-import { readFile, readdir } from "node:fs/promises";
+import { open, readdir } from "node:fs/promises";
 import path from "node:path";
 import { SandboxRunner } from "../sandbox/index.js";
 import { DiscoveryResult, ExampleCall } from "./types.js";
 
 const MAX_FILES = 250;
+const MAX_DIRECTORIES = 1_000;
 const MAX_TEXT_BYTES = 64_000;
 const SOURCE_EXTENSIONS = new Set([".js", ".cjs", ".mjs", ".ts", ".cts", ".mts"]);
 
-async function walk(directory: string, files: string[] = []): Promise<string[]> {
-  if (files.length >= MAX_FILES) return files;
-  const entries = await readdir(directory, { withFileTypes: true });
-  for (const entry of entries) {
-    if (files.length >= MAX_FILES) break;
-    const fullPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) await walk(fullPath, files);
-    else if (entry.isFile()) files.push(fullPath);
+async function walk(directory: string): Promise<string[]> {
+  const files: string[] = [];
+  const directories = [directory];
+  for (let index = 0; index < directories.length && files.length < MAX_FILES && index < MAX_DIRECTORIES; index += 1) {
+    const entries = await readdir(directories[index], { withFileTypes: true });
+    for (const entry of entries) {
+      if (files.length >= MAX_FILES) break;
+      const fullPath = path.join(directories[index], entry.name);
+      if (entry.isDirectory() && directories.length < MAX_DIRECTORIES) directories.push(fullPath);
+      else if (entry.isFile()) files.push(fullPath);
+    }
   }
   return files;
 }
 
 async function readSnippet(filePath: string): Promise<string> {
-  const content = await readFile(filePath, "utf8");
-  return content.slice(0, MAX_TEXT_BYTES);
+  const handle = await open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(MAX_TEXT_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 function isTestFile(relativePath: string): boolean {

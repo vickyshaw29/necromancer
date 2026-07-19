@@ -1,15 +1,36 @@
-import fc from "fast-check";
 import { JsonSafeValue } from "../sandbox/index.js";
-import { DiscoveryResult, FunctionInputPlan, InputCandidate, InputPlan } from "./types.js";
+import { DiscoveryResult, InputCandidate, InputPlan } from "./types.js";
+import {
+  amplifiedSemanticCandidates,
+  argumentShapeCandidates,
+  isProbeInput,
+  lastRitesCandidates,
+  semanticCandidates
+} from "./shapes.js";
 
 const INPUT_TAG = "$necromancer";
+const MIN_AMPLIFIED_CANDIDATES = 16;
+const MAX_MODEL_CANDIDATES = 40;
+const MAX_EXAMPLE_CANDIDATES = 24;
+const MAX_HELD_OUT_BEHAVIORS = 16;
+
+export interface ProbeCandidate {
+  fn: string;
+  args: unknown[];
+}
+
+export interface ProbeCandidateBatches {
+  observed: ProbeCandidate[];
+  heldOut: ProbeCandidate[];
+}
+
+interface CallableExport {
+  path: string;
+  arity?: number;
+}
 
 function hasInputTag(value: Record<string, JsonSafeValue>): boolean {
   return Object.prototype.hasOwnProperty.call(value, INPUT_TAG);
-}
-
-function prototypePayload(): Record<string, unknown> {
-  return JSON.parse('{"__proto__":{"necromancerProbe":true},"constructor":{"prototype":{"polluted":true}}}') as Record<string, unknown>;
 }
 
 function stableInput(value: unknown): string {
@@ -32,6 +53,83 @@ function stableInput(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function uniqueArgs(candidates: unknown[][], limit: number, excluded = new Set<string>()): unknown[][] {
+  if (limit <= 0) return [];
+  const unique: unknown[][] = [];
+  const seen = new Set(excluded);
+  for (const args of candidates) {
+    if (!isProbeInput(args)) continue;
+    const key = stableInput(args);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(args);
+    if (unique.length >= limit) break;
+  }
+  return unique;
+}
+
+function candidatesForFunction(
+  exportPath: string,
+  arity: number | undefined,
+  modelCandidates: InputCandidate[],
+  examples: InputCandidate[],
+  count: number
+): unknown[][] {
+  const fixedShapes = argumentShapeCandidates();
+  const supplied = [...modelCandidates.slice(0, MAX_MODEL_CANDIDATES), ...examples.slice(0, MAX_EXAMPLE_CANDIDATES)].map((candidate) => candidate.args);
+  const semantic = semanticCandidates(arity);
+  const amplified = amplifiedSemanticCandidates(arity, exportPath, Math.max(MIN_AMPLIFIED_CANDIDATES, count));
+  return uniqueArgs([...fixedShapes, ...supplied, ...semantic, ...amplified], count);
+}
+
+function callableExports(discovery: DiscoveryResult): CallableExport[] {
+  const seen = new Set<string>();
+  return discovery.surface.exports.flatMap((item) => {
+    if (item.type !== "function" || seen.has(item.path)) return [];
+    seen.add(item.path);
+    return [{ path: item.path, ...(item.arity === undefined ? {} : { arity: item.arity }) }];
+  });
+}
+
+function quotas(functionCount: number, budget: number): number[] {
+  if (functionCount === 0 || budget === 0) return Array.from({ length: functionCount }, () => 0);
+  const base = Math.floor(budget / functionCount);
+  const remainder = budget % functionCount;
+  return Array.from({ length: functionCount }, (_, index) => base + (index < remainder ? 1 : 0));
+}
+
+function roundRobin(functions: CallableExport[], candidateLists: unknown[][][]): ProbeCandidate[] {
+  const output: ProbeCandidate[] = [];
+  let index = 0;
+  let remaining = true;
+  while (remaining) {
+    remaining = false;
+    for (const [functionIndex, plan] of functions.entries()) {
+      const args = candidateLists[functionIndex][index];
+      if (!args) continue;
+      output.push({ fn: plan.path, args });
+      remaining = true;
+    }
+    index += 1;
+  }
+  return output;
+}
+
+function examplesByPath(discovery: DiscoveryResult): Map<string, InputCandidate[]> {
+  const examples = new Map<string, InputCandidate[]>();
+  for (const example of discovery.examples) {
+    const current = examples.get(example.exportPath) ?? [];
+    current.push({ args: example.args, rationale: example.source });
+    examples.set(example.exportPath, current);
+  }
+  return examples;
+}
+
+function heldOutBudget(observedBudget: number): number {
+  return Math.min(MAX_HELD_OUT_BEHAVIORS, Math.max(1, Math.floor(observedBudget / 5)));
+}
+
+/** Convert values to the tagged JSON form used by probe artifacts. */
 export function toArtifactValue(value: unknown, ancestors = new WeakMap<object, string>(), valuePath = "$"): JsonSafeValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (value === undefined) return { [INPUT_TAG]: "undefined" };
@@ -68,119 +166,38 @@ export function toArtifactValue(value: unknown, ancestors = new WeakMap<object, 
   }
 }
 
-function semanticCandidates(arity: number): unknown[][] {
-  const width = Math.max(1, Math.min(arity || 1, 3));
-  const baseline: unknown[] = Array.from({ length: width }, () => "x");
-  const scalars: unknown[] = [
-    "",
-    "x",
-    "hello",
-    "😀",
-    "e\u0301",
-    "x".repeat(1_024),
-    0,
-    1,
-    -1,
-    2,
-    5,
-    42,
-    10_000,
-    Number.NaN,
-    Infinity,
-    -Infinity,
-    null,
-    undefined,
-    true,
-    false,
-    [],
-    {},
-    prototypePayload()
-  ];
-  const candidates: unknown[][] = [[], [...baseline]];
-  for (let position = 0; position < width; position += 1) {
-    for (const scalar of scalars) {
-      const args = [...baseline];
-      args[position] = scalar;
-      candidates.push(args);
-    }
-  }
-  return candidates;
-}
-
-function seedFor(path: string): number {
-  let hash = 2_166_136_261;
-  for (const character of path) hash = Math.imul(hash ^ character.charCodeAt(0), 16_777_619);
-  return hash >>> 0;
-}
-
-function amplifiedCandidates(arity: number, exportPath: string, count: number): unknown[][] {
-  const width = Math.max(1, Math.min(arity || 1, 3));
-  const primitive = fc.oneof(
-    fc.string({ maxLength: 64 }),
-    fc.integer({ min: -10_000, max: 10_000 }),
-    fc.boolean(),
-    fc.constant(null),
-    fc.constant(undefined),
-    fc.array(fc.integer({ min: -8, max: 8 }), { maxLength: 8 }),
-    fc.constant(prototypePayload())
-  );
-  return fc.sample(fc.array(primitive, { minLength: width, maxLength: width }), {
-    numRuns: count,
-    seed: seedFor(exportPath)
-  });
-}
-
 export function heuristicInputPlan(discovery: DiscoveryResult): InputPlan {
   return {
-    functions: discovery.surface.exports
-      .filter((item) => item.type === "function")
-      .map((item) => ({
+    functions: callableExports(discovery).map((item) => {
+      return {
         exportPath: item.path,
-        candidates: semanticCandidates(item.arity ?? 1).slice(0, 24).map((args) => ({ args, rationale: "deterministic type-informed seed" }))
-      }))
+        candidates: semanticCandidates(item.arity).slice(0, 24).map((args) => ({ args, rationale: "deterministic type-informed seed" }))
+      };
+    })
   };
 }
 
-function candidatesForFunction(
-  exportPath: string,
-  arity: number,
-  modelCandidates: InputCandidate[],
-  examples: InputCandidate[],
-  maxCandidates: number
-): unknown[][] {
-  const all = [
-    ...modelCandidates.map((candidate) => candidate.args),
-    ...examples.map((candidate) => candidate.args),
-    ...semanticCandidates(arity),
-    ...amplifiedCandidates(arity, exportPath, Math.max(24, maxCandidates))
-  ];
-  const seen = new Set<string>();
-  const unique: unknown[][] = [];
-  for (const args of all) {
-    const key = stableInput(args);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(args);
-    if (unique.length >= maxCandidates) break;
-  }
-  return unique;
-}
-
-/** Merge model seeds, shipped examples, and deterministic fast-check mutations. */
-export function buildProbeCandidates(discovery: DiscoveryResult, plan: InputPlan, maxBehaviors: number): Array<{ fn: string; args: unknown[] }> {
-  const functions = discovery.surface.exports.filter((item) => item.type === "function");
-  const perFunction = Math.max(1, Math.ceil(maxBehaviors / Math.max(functions.length, 1)));
+/** Build public evidence and a separate deterministic evaluation batch. */
+export function buildProbeCandidateBatches(discovery: DiscoveryResult, plan: InputPlan, maxBehaviors: number): ProbeCandidateBatches {
+  const functions = callableExports(discovery);
   const planByPath = new Map(plan.functions.map((item) => [item.exportPath, item.candidates]));
-  const examplesByPath = new Map<string, InputCandidate[]>();
-  for (const example of discovery.examples) {
-    const current = examplesByPath.get(example.exportPath) ?? [];
-    current.push({ args: example.args, rationale: example.source });
-    examplesByPath.set(example.exportPath, current);
+  const examples = examplesByPath(discovery);
+  const observedQuotas = quotas(functions.length, maxBehaviors);
+  const observedLists = functions.map((item, index) => {
+    if (observedQuotas[index] === 0) return [];
+    return candidatesForFunction(item.path, item.arity, planByPath.get(item.path) ?? [], examples.get(item.path) ?? [], observedQuotas[index]);
+  });
+  const observed = roundRobin(functions, observedLists);
+  const knownByFunction = new Map<string, Set<string>>();
+  for (const candidate of observed) {
+    const known = knownByFunction.get(candidate.fn) ?? new Set<string>();
+    known.add(stableInput(candidate.args));
+    knownByFunction.set(candidate.fn, known);
   }
-
-  return functions.flatMap((item) =>
-    candidatesForFunction(item.path, item.arity ?? 1, planByPath.get(item.path) ?? [], examplesByPath.get(item.path) ?? [], perFunction).map(
-      (args) => ({ fn: item.path, args })
-    )
-  );
+  const heldOutQuotas = quotas(functions.length, heldOutBudget(maxBehaviors));
+  const heldOutLists = functions.map((item, index) => {
+    if (heldOutQuotas[index] === 0) return [];
+    return uniqueArgs(lastRitesCandidates(item.arity, item.path, heldOutQuotas[index] + 8), heldOutQuotas[index], knownByFunction.get(item.path));
+  });
+  return { observed, heldOut: roundRobin(functions, heldOutLists) };
 }

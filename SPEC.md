@@ -1,6 +1,6 @@
 # 💀 NECROMANCER — Build Spec v1
 
-> **One-liner:** Necromancer resurrects dead software. Point it at an abandoned package; it runs the corpse in a sandbox, extracts its soul (a behavioral spec + executable test suite derived from *observed behavior*), then orchestrates Codex to rebuild it in a modern, zero-dependency, CVE-free form that must pass the original's own extracted tests.
+> **One-liner:** Necromancer reconstructs bounded, observed behavior from abandoned JavaScript packages. It extracts a SOUL (a behavioral spec + executable test suite derived from *observed behavior*) and orchestrates Codex to rebuild against that suite. Its evidence is limited to recorded compatibility and measured coverage; dependency advisory scans are metadata, not proof of code security or CVE remediation.
 >
 > **Track:** Developer Tools · **Hackathon:** OpenAI Build Week · **Deadline:** July 21, 5:00 PM PDT (= July 22, 5:30 AM IST)
 
@@ -8,7 +8,7 @@
 
 ## 1. The wedge (what we say it's for)
 
-Abandoned dependencies with known CVEs. Every real project has one: the maintainer left in 2021, there are 40 open issues, `npm audit` screams, and nobody dares touch it because **there are no tests and nobody understands the code**. Necromancer's two outputs attack exactly that:
+Abandoned dependencies with known advisories. Every real project has one: the maintainer left in 2021, there are 40 open issues, `npm audit` screams, and nobody dares touch it because **there are no tests and nobody understands the code**. Necromancer's two outputs attack exactly that:
 
 1. **The Soul** — a characterization test suite + human-readable behavioral spec extracted empirically. Valuable *on its own* (this is the "no tests" problem solved), even if you never adopt the rebuild.
 2. **The Resurrection** — a modern TypeScript rebuild, zero runtime deps, gated by the Soul.
@@ -16,6 +16,9 @@ Abandoned dependencies with known CVEs. Every real project has one: the maintain
 ## 2. Honest claims (judge-proofing — never violate these)
 
 - **NEVER** say "100% parity" or "proven identical." Say: **"parity across N observed behaviors, X% branch coverage of the original."** The UI must display both numbers prominently. Precision reads as *more* impressive to expert judges, not less.
+- Report branch, line, and function coverage; show the recorded argument shapes and any separate held-out result. A `REVIVED` label is reserved for a complete recorded suite, not a percentage threshold.
+- **NEVER** describe a dependency-manifest advisory scan as a source-code audit or a CVE fix. A zero result means only that the declared runtime dependencies scanned returned no published OSV advisories at that time.
+- Compatibility can preserve a legacy defect. A passing recorded suite does not prove security, vulnerability remediation, equivalence, or production safety.
 - The tool must **genuinely work on arbitrary small packages** — Developer Tools judges install and run entries on their own inputs. Cherry-picked-demo-only = death.
 - When a target is out of scope (native modules, network I/O, >2k LOC), **fail fast with a clear, friendly message** that states v1 scope. A confident "this corpse is beyond v1 necromancy: it binds to native code" beats a hang or a garbage result.
 
@@ -35,14 +38,14 @@ necromancer <pkg-name>[@version]   (CLI, npx-able)
      │
      ├─ 1. EXHUME    – fetch tarball from npm registry; static triage
      │                 (LOC count, dep tree, native-module / io scan → in-scope gate)
-     ├─ 2. SANDBOX   – install & load in isolated runner
-     │                 (Docker if available, else child-process w/ --disallow network via env + warning)
+     ├─ 2. SANDBOX   – install & load in a defensive compatibility runner
+     │                 (Docker required by default; `--no-docker` explicitly selects reduced isolation)
      ├─ 3. PROBE     – discover API surface (introspect exports, parse README examples,
      │                 mine the package's own tests if any)
      │                 → GPT-5.6 generates candidate inputs (typical / edge / adversarial / type-chaos)
      │                 → property-based amplification via fast-check
      │                 → execute against original, RECORD {input, output|throw, type} tuples
-     │                 → measure branch coverage of the ORIGINAL under probing (c8)
+     │                 → measure branch, line, and function coverage of the ORIGINAL under probing (c8)
      ├─ 4. DISTILL   – GPT-5.6 turns recorded behaviors into:
      │                 a) SOUL.md   – human-readable behavioral spec (grouped, named behaviors,
      │                                including the WEIRD ones: quirks, inconsistencies, bug-compat notes)
@@ -53,17 +56,20 @@ necromancer <pkg-name>[@version]   (CLI, npx-able)
      │                 engine=api  (fallback): GPT-5.6 API direct codegen loop
      │                 iterate: generate → run soul.test.ts → feed failures back → repeat (cap: 6 rounds)
      │                 target: modern TS, zero runtime deps, ESM+CJS dual build
-     └─ 6. REPORT    – parity: N/M behaviors passing; coverage % of original;
-                       `npm audit`/OSV before vs after; LOC & dep-count before vs after
+     └─ 6. REPORT    – observed fidelity: N/M behaviors passing; branch/line/function coverage;
+                       argument-shape and held-out evidence when recorded; published OSV metadata for
+                       the original and declared rebuild dependencies; LOC & dep-count before vs after
                        → terminal summary + static HTML "graveyard" report (tombstone → phoenix)
 ```
 
+`necromancer replay` is a separate, offline report-UX fixture. It invokes the real renderer with tracked fictional data and writes a local HTML file; it never fetches, executes, rebuilds, or assesses a package.
+
 ### Component notes
 
-- **PROBE is the crown jewel** — this is the novel part; give it the most build time. Input generation strategy per exported function: (1) GPT-5.6 reads source + README and proposes ~20 semantically meaningful inputs incl. edge cases; (2) fast-check fuzzes around them (type mutations, boundary values, unicode, prototype-pollution payloads); (3) everything executed against the original, results recorded verbatim — including thrown errors and their messages (bug-for-bug fidelity is a *feature*: name these "quirk behaviors" in SOUL.md).
+- **PROBE is the crown jewel** — this is the novel part; give it the most build time. Input generation strategy per exported function: (1) GPT-5.6 reads source + README and proposes ~20 semantically meaningful inputs incl. edge cases; (2) fast-check fuzzes around them (type mutations, boundary values, unicode, prototype-pollution payloads); (3) everything executed against the original, results recorded verbatim — including thrown errors and their messages. Bug-compatible behavior is evidence, not a security endorsement; name it plainly in SOUL.md.
 - **Determinism filter:** run every recorded behavior twice; discard non-deterministic ones (Date.now, randomness) or wrap with tolerance. The suite must be flake-free — judges will run it.
 - **RESURRECT via Codex** makes the product itself Codex-powered (maximum theme alignment): Necromancer writes a work order (SOUL.md + test file + constraints) into a temp workspace and invokes the Codex CLI non-interactively. Auto-detect Codex CLI; fall back to `--engine api` with a notice so judges without Codex auth can still test.
-- **Sandbox:** Docker preferred (`node:20-slim`, `--network=none` after install). If no Docker: isolated child process, scrubbed env, and an explicit "reduced isolation" warning. Never `require()` the target in the main process.
+- **Sandbox:** Docker required by default (`node:20-slim`, `--network=none` after install) with dedicated writable coverage/report mounts. `--no-docker` explicitly selects a child process with a scrubbed environment and a reduced-isolation warning. Never `require()` the target in the main process; neither mode replaces a security review or a disposable-machine policy for untrusted code.
 
 ## 5. Tech stack
 
@@ -75,8 +81,8 @@ TypeScript, Node 20. CLI: commander + a polished terminal UI (ora spinners, chal
 |---|---|
 | `left-pad` | THE iconic dead package ("broke the internet, 2016") — perfect cold open |
 | `is-odd` | Meme value; 400k weekly downloads for one modulo — comedy beat |
-| `deep-extend` or `set-value` (old ver) | Real prototype-pollution CVE — the wedge use case, played straight |
-| `growl` | Abandoned + CVE + no tests — the "typical corpse" |
+| `deep-extend` or `set-value` (old ver) | Published prototype-pollution advisory — demonstrates the compatibility/security trade-off |
+| `growl` | Abandoned package with published advisory history — the "typical corpse" |
 | + 5–10 random small packages | Hardening set — this is the "works on judge's input" insurance |
 
 ## 7. Day-by-day plan (buffer included)
@@ -90,8 +96,8 @@ TypeScript, Node 20. CLI: commander + a polished terminal UI (ora spinners, chal
 ## 8. Demo video — beat sheet (<3 min, voiceover required)
 
 1. **0:00–0:20 Cold open:** "In 2016, eleven lines of code vanished and broke the internet. left-pad's maintainer quit. Every dead package is a tiny time bomb in someone's supply chain." Tombstone graphic.
-2. **0:20–0:50 The claim:** "Necromancer brings dead software back to life — and proves it." Run `npx necromancer deep-extend`. Narrate the phases as they stream.
-3. **0:50–1:40 The magic:** SOUL.md scrolls (point at a *quirk* behavior it caught — that's the "no human wrote this" moment); Codex rebuild iterations; parity meter climbs; report: "parity across 214 observed behaviors, 91% branch coverage, CVEs: 1 → 0, deps: 4 → 0."
+2. **0:20–0:50 The claim:** "Necromancer makes a dead package's observed behavior inspectable and reconstructable." Run `npx necromancer deep-extend@0.5.0`. Narrate the phases as they stream.
+3. **0:50–1:40 The magic:** SOUL.md scrolls (point at a *quirk* behavior it caught — that's the "no human wrote this" moment); Codex rebuild iterations; observed-suite meter; report: "N of M recorded behaviors, branch/line/function coverage, input-shape evidence, and explicit advisory-scan scope." Make clear that compatibility evidence and a dependency scan are not a security-remediation claim.
 4. **1:40–2:10 Range shot:** montage of 3 more resurrections incl. is-odd for the laugh.
 5. **2:10–2:40 How + Codex story:** architecture slide (10 sec); "the entire pipeline was built in one Codex thread — and the rebuild engine *is* Codex, driven by machine-written specs."
 6. **2:40–3:00 Close:** "The Soul is yours even if you never adopt the rebuild. Software dies when knowledge dies. Now knowledge is extractable. — Necromancer. Bring out your dead."
@@ -101,7 +107,7 @@ TypeScript, Node 20. CLI: commander + a polished terminal UI (ora spinners, chal
 | Risk | Mitigation |
 |---|---|
 | Rebuild loop can't reach high parity on some target | Ship anyway: the Soul alone is the fallback value; report shows honest N/M |
-| Docker missing on judge machine | Auto-fallback isolation + warning; README states both paths |
+| Docker missing on judge machine | Clear Docker requirement; `--no-docker` is an explicit reduced-isolation option for a disposable VM |
 | Judge lacks Codex CLI auth | `--engine api` fallback documented in README |
 | Probe runtime too slow / API cost | Cap probe budget per function; cache aggressively; `--fast` mode |
 | Non-deterministic tests flake for judges | Determinism filter (run-twice) is non-negotiable in Day 1 scope |

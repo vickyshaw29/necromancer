@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NECROMANCER offline report replay</title>
+<style>
+:root { color-scheme: dark; --bg:#101217; --panel:#191d25; --raised:#202632; --line:#303746; --text:#e7eaf0; --muted:#aab2c0; --accent:#8bd7b1; --warn:#e7c178; } * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; } main { max-width:1060px; margin:auto; padding:28px 22px 56px; } header { padding:30px; border:1px solid var(--line); border-radius:96px 96px 18px 18px; background:linear-gradient(145deg,#202632,#151820); text-align:center; } h1 { margin:0; font-size:clamp(28px,5vw,48px); overflow-wrap:anywhere; } h2 { margin:34px 0 12px; color:var(--accent); font-size:17px; letter-spacing:.06em; } p { margin:8px 0 0; } a { color:var(--accent); } .label { color:var(--muted); font-size:12px; letter-spacing:.08em; text-transform:uppercase; } .state { color:var(--accent); font-weight:700; letter-spacing:.16em; } .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; } .receipt { margin-top:14px; display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; } .panel { padding:18px; border:1px solid var(--line); border-radius:12px; background:var(--panel); } .value { margin-top:6px; font-size:19px; overflow-wrap:anywhere; } .muted { color:var(--muted); } .boundary { margin-top:14px; border-left:3px solid var(--warn); background:#211f19; color:#f0dfb8; } .meter { height:13px; margin-top:26px; overflow:hidden; border:1px solid var(--line); border-radius:999px; background:#0c0e12; } .meter span { display:block; width:100%; height:100%; background:linear-gradient(90deg,#4f9d79,var(--accent)); } ul { margin:8px 0 0; padding-left:20px; } @media (max-width:680px) { main { padding:18px 14px 42px; } header { padding:24px 16px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="label">Curated offline report fixture — not a package run</div>
+    <h1>† replay-fixture@0.0.0</h1>
+    <p class="state">REVIVED (fixture only)</p>
+    <p>3 of 3 observed behaviors, 66.67% branch coverage of the fictional original</p>
+  </header>
+
+  <section class="receipt" aria-label="Fixture evidence">
+    <article class="panel"><div class="label">Recorded-suite evidence</div><div class="value">3 of 3 observed behaviors reproduced</div><div class="meter" aria-label="100 percent fixture reproduction"><span></span></div></article>
+    <article class="panel"><div class="label">Original-code coverage observed during probing</div><div class="value">Branch 66.67% · Line 75.00% · Function 50.00%</div><p class="muted">Coverage is not a security score or a claim about unobserved behavior.</p></article>
+    <article class="panel boundary"><div class="label">Unobserved boundary</div><div class="value">1 of 3 fictional original branches was never exercised — behavior there is not claimed.</div></article>
+  </section>
+
+  <article class="panel boundary"><div class="label">Compatibility / security boundary</div><div class="value">A passing recorded suite shows only observed compatibility. It does not prove security, vulnerability remediation, equivalence, or production safety.</div></article>
+
+  <h2>Observed fidelity</h2>
+  <section class="grid">
+    <article class="panel"><div class="label">Observed argument shapes</div><div class="value">Observed arities: 0, 1, 2; 1 of 3 calls used 2+ arguments.</div><p class="muted">A missing arity or input shape is outside the compatibility claim.</p></article>
+    <article class="panel"><div class="label">Held-out behavior check</div><div class="value">1 of 1 held-out behaviors passed.</div></article>
+    <article class="panel"><div class="label">Published advisory scan — original</div><div class="value">0 published OSV advisories</div><p class="muted">Scope: fictional original replay-fixture@0.0.0. This is fixture data, not source-code analysis.</p></article>
+    <article class="panel"><div class="label">Declared-dependency advisory scan — rebuild</div><div class="value">No published OSV advisories found across 0 declared runtime dependencies</div><p class="muted">Scope: 0 declared rebuild runtime dependencies scanned. This scan does not analyze generated code or establish CVE remediation.</p></article>
+  </section>
+
+  <h2>Fixture provenance</h2>
+  <article class="panel"><p>This static replay is backed by <a href="replay-input.json">replay-input.json</a> and <a href="replay-provenance.json">replay-provenance.json</a>. It uses no external assets or scripts.</p></article>
+</main>
+</body>
+</html>

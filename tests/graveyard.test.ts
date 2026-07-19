@@ -21,7 +21,7 @@ async function artifact(
   await mkdir(directory, { recursive: true });
   await writeFile(
     path.join(directory, "behaviors.json"),
-    `${JSON.stringify({ packageName, version, behaviors: Array.from({ length: behaviorCount }, () => ({})), coverage: { branchCoverage: 71.25 } })}\n`,
+    `${JSON.stringify({ packageName, version, behaviors: Array.from({ length: behaviorCount }, () => ({})), coverage: { branchCoverage: 71.25, lineCoverage: 64, functionCoverage: 50 } })}\n`,
     "utf8"
   );
   if (result) {
@@ -40,6 +40,7 @@ describe("graveyard index", () => {
     temporaryPaths.push(cacheDirectory);
     const older = await artifact(cacheDirectory, "older", "failed-fixture", "1.0.0", 3, { passed: 0, total: 3, engine: "api" });
     const newer = await artifact(cacheDirectory, "newer", '<script>alert("x")</script>', "2.0.0", 1, { passed: 1, total: 1, engine: "codex" });
+    await artifact(cacheDirectory, "partial", "partial-fixture", "1.0.0", 10, { passed: 9, total: 10, engine: "codex" });
     await artifact(cacheDirectory, "awaiting", "probe-fixture", "3.0.0", 2);
     const past = new Date(Date.now() - 60_000);
     await utimes(older, past, past);
@@ -55,8 +56,9 @@ describe("graveyard index", () => {
     expect(html.indexOf("&lt;script&gt;")).toBeLessThan(html.indexOf("failed-fixture@1.0.0"));
     expect(html).not.toContain('<script>alert("x")</script>');
     expect(html).toContain("REVIVED");
+    expect(html).toContain("PARTIAL RECONSTRUCTION");
     expect(html).toContain("FAILED RECONSTRUCTION");
-    expect(html).toContain("71.25% branch coverage of the original");
+    expect(html).toContain("Coverage: branch 71.25%; line 64.00%; function 50.00% of the original");
     expect(html).toContain("Rebuild engine: codex");
     expect(html).toContain("Probe artifacts without a completed reconstruction");
     expect(html).toContain("probe-fixture@3.0.0");

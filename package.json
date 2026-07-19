@@ -19,7 +19,6 @@
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "coverage": "c8 npm run test",
     "check": "tsc --noEmit"
   },
   "dependencies": {
