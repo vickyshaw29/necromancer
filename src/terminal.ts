@@ -46,8 +46,12 @@ export function printReproducibilityHandoff(artifactDirectory: string, distilled
   const soul = path.join(artifactDirectory, "SOUL.md");
   const distillNote = distilledAvailable ? "" : " (available after DISTILL)";
   const rebuiltNote = rebuiltAvailable ? "" : " (available after RESURRECT)";
+  const rebuiltSource = path.join(artifactDirectory, "rebuilt", "src", "index.ts");
+  const graveyardReport = path.join(artifactDirectory, "graveyard.html");
   console.log("\nNEXT actions");
   console.log(`  View SOUL.md: ${soul}${distillNote}`);
+  console.log(`  View rebuilt source: ${rebuiltSource}${rebuiltNote}`);
+  console.log(`  Open graveyard report: open ${JSON.stringify(graveyardReport)}${rebuiltNote}`);
   console.log(`  Rerun against original: npx vitest run --root ${root} soul.test.ts${distillNote}`);
   console.log(`  Rerun with NECROMANCER_IMPL=rebuilt: NECROMANCER_IMPL=rebuilt npx vitest run --root ${root} soul.test.ts${rebuiltNote}`);
 }

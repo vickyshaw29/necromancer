@@ -171,6 +171,10 @@ function dockerTestArgs(
     "-v",
     dockerMount(path.join(runtimeDirectory, "node_modules"), "/work/node_modules", true),
     "-v",
+    // Vite writes its transpiled config bundle to node_modules/.vite-temp; the runtime
+    // mount is read-only, so a writable directory is bind-mounted over that path.
+    dockerMount(path.join(reportDirectory, "vite-temp"), "/work/node_modules/.vite-temp"),
+    "-v",
     dockerMount(reportDirectory, "/reports"),
     "-w",
     "/work",
@@ -207,6 +211,8 @@ async function runDockerCharacterization(
   testFile: string
 ): Promise<void> {
   const runtime = await dockerRuntime(options.offline === true);
+  await mkdir(path.join(runtime, "node_modules", ".vite-temp"), { recursive: true });
+  await mkdir(path.join(reportDirectory, "vite-temp"), { recursive: true });
   const environment = await dockerClientEnvironment(reportDirectory);
   const result = await runProcess(
     "docker",
