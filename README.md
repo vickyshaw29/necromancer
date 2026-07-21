@@ -42,6 +42,10 @@ That command fetches the package, creates artifacts under `.necromancer-cache/pr
 
 ## Engines
 
+### How Codex and GPT-5.6 are used
+
+The OpenAI API engine calls GPT-5.6 (`OPENAI_MODEL` in `src/openai.ts`) and the `codex` engine drives the Codex CLI. They power the two model-dependent jobs: planning semantic probe inputs in PROBE/DISTILL, and writing the TypeScript rebuild in RESURRECT — where the model receives SOUL.md, the characterization suite, and structured judge feedback (never the original source) for up to six repair rounds. The live resurrection results table below was produced with the Codex engine.
+
 PROBE and DISTILL use `api → codex → heuristic` automatically: the OpenAI API is selected when `OPENAI_API_KEY` is present, then Codex CLI when available, then the deterministic heuristic planner/writer. Override with `--engine api`, `--engine codex`, or `--engine heuristic` where supported.
 
 RESURRECT requires a model engine because emitting a meaningful implementation is not a heuristic operation. It auto-selects Codex CLI then the OpenAI API, or accepts `--engine api` / `--engine codex`; if neither is available, it exits before EXHUME with a clear setup message and does not fabricate a rebuild. In automatic mode, a Codex generation failure switches the remaining rounds to the API when `OPENAI_API_KEY` is available; explicit engine selections remain strict.
